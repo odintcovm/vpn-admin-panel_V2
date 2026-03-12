@@ -19,11 +19,14 @@ export async function parseApiError(res: Response): Promise<ApiError> {
   const text = await res.text()
   try {
     const parsed = JSON.parse(text)
+    const detailError = parsed?.detail?.error
+    const rootError = parsed?.error
+
     return {
       status: res.status,
-      code: parsed?.error?.code ?? `HTTP_${res.status}`,
-      message: parsed?.error?.message ?? parsed?.detail ?? text,
-      details: parsed?.error?.details
+      code: detailError?.code ?? rootError?.code ?? `HTTP_${res.status}`,
+      message: detailError?.message ?? rootError?.message ?? parsed?.detail ?? text,
+      details: detailError?.details ?? rootError?.details
     }
   } catch {
     return { status: res.status, code: `HTTP_${res.status}`, message: text || 'Unknown API error' }

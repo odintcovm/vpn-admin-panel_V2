@@ -1,6 +1,7 @@
-from fastapi import FastAPI, Request
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from sqlalchemy import inspect
+from sqlalchemy.exc import SQLAlchemyError
 
 from app.api.routes import router
 from app.core.config import settings
@@ -18,22 +19,20 @@ app.add_middleware(
 )
 
 
-@app.middleware("http")
-async def token_guard(request: Request, call_next):
-    exempt_paths = {"/health", "/api/events/stream"}
-    if request.url.path.startswith("/api") and request.method != "OPTIONS" and request.url.path not in exempt_paths:
-        token = request.headers.get("x-api-token")
-        if token != settings.api_token:
-            return JSONResponse(status_code=401, content={"detail": "Unauthorized"})
-    return await call_next(request)
-
-
 @app.on_event("startup")
 def startup_event():
-    Base.metadata.create_all(bind=engine)
+    if settings.schema_management_mode == "bootstrap":
+        Base.metadata.create_all(bind=engine)
+
+    inspector = inspect(engine)
+    if "user_links" not in inspector.get_table_names():
+        return
+
     db = SessionLocal()
     try:
         seed_if_empty(db)
+    except SQLAlchemyError:
+        db.rollback()
     finally:
         db.close()
 

@@ -1,4 +1,4 @@
-export type Overview = {
+export type DashboardOverview = {
   total_links: number
   active_connections: number
   traffic_24h_gb: number
@@ -61,7 +61,15 @@ export type NotificationItem = {
   entity_type: string | null
   entity_id: string | null
   is_read: boolean
+  read_at?: string | null
   created_at: string
+}
+
+export type AuthMe = {
+  subject_id: string
+  role: string
+  permissions: string[]
+  dev_role_emulation_enabled: boolean
 }
 
 export type ServerStatus = {
@@ -73,3 +81,5 @@ export type ServerStatus = {
   port: number
   config_summary: Record<string, unknown>
 }
+
+export type Overview = DashboardOverview

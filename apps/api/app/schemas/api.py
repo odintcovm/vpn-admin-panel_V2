@@ -85,6 +85,7 @@ class NotificationOut(BaseModel):
     entity_type: str | None
     entity_id: str | None
     is_read: bool
+    read_at: datetime | None = None
     created_at: datetime
 
 
@@ -115,5 +116,7 @@ class ActionLogOut(BaseModel):
 
 
 class AuthMeOut(BaseModel):
+    subject_id: str
     role: str
     permissions: list[str]
+    dev_role_emulation_enabled: bool

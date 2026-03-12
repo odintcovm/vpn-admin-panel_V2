@@ -2,13 +2,15 @@ import json
 import uuid
 from datetime import datetime, timedelta
 
-from sqlalchemy.orm import Session
+from sqlalchemy import and_
+from sqlalchemy.orm import Session, aliased
 
-from app.core.security import ROLE_PERMISSIONS
+from app.core.security import ROLE_PERMISSION_MAP
 from app.models.entities import (
     AdminActionLog,
     ClientSession,
     Notification,
+    NotificationRead,
     Permission,
     Role,
     RolePermission,
@@ -58,21 +60,23 @@ class LinkService:
         items = []
         for link in links:
             status = "disabled" if not link.enabled else ("active" if link.last_activity_at and link.last_activity_at > datetime.utcnow() - timedelta(hours=2) else "idle")
-            items.append({
-                "id": link.id,
-                "name": link.name,
-                "uuid": link.uuid,
-                "note": link.note,
-                "tag": link.tag,
-                "status": status,
-                "enabled": link.enabled,
-                "last_ip": link.last_ip,
-                "last_activity_at": link.last_activity_at,
-                "total_traffic_gb": link.total_traffic_gb,
-                "traffic_limit_gb": link.traffic_limit_gb,
-                "expires_at": link.expires_at,
-                "vless_url": f"vless://{link.uuid}@vpn.example.com:443?security=tls&type=tcp#{link.name}",
-            })
+            items.append(
+                {
+                    "id": link.id,
+                    "name": link.name,
+                    "uuid": link.uuid,
+                    "note": link.note,
+                    "tag": link.tag,
+                    "status": status,
+                    "enabled": link.enabled,
+                    "last_ip": link.last_ip,
+                    "last_activity_at": link.last_activity_at,
+                    "total_traffic_gb": link.total_traffic_gb,
+                    "traffic_limit_gb": link.traffic_limit_gb,
+                    "expires_at": link.expires_at,
+                    "vless_url": f"vless://{link.uuid}@vpn.example.com:443?security=tls&type=tcp#{link.name}",
+                }
+            )
         return items
 
     def create(self, payload: dict):
@@ -119,23 +123,25 @@ class ClientService:
         clients = query.order_by(ClientSession.last_activity_at.desc()).all()
         out = []
         for c in clients:
-            out.append({
-                "id": c.id,
-                "client_name": c.client_name,
-                "link_name": c.link.name,
-                "link_id": c.link_id,
-                "status": c.status,
-                "current_ip": c.current_ip,
-                "ip_history": json.loads(c.ip_history),
-                "active_sessions": c.active_sessions,
-                "total_traffic_gb": c.total_traffic_gb,
-                "traffic_24h_gb": c.traffic_24h_gb,
-                "traffic_7d_gb": c.traffic_7d_gb,
-                "last_activity_at": c.last_activity_at,
-                "note": c.link.note,
-                "tag": c.link.tag,
-                "events": json.loads(c.events_json),
-            })
+            out.append(
+                {
+                    "id": c.id,
+                    "client_name": c.client_name,
+                    "link_name": c.link.name,
+                    "link_id": c.link_id,
+                    "status": c.status,
+                    "current_ip": c.current_ip,
+                    "ip_history": json.loads(c.ip_history),
+                    "active_sessions": c.active_sessions,
+                    "total_traffic_gb": c.total_traffic_gb,
+                    "traffic_24h_gb": c.traffic_24h_gb,
+                    "traffic_7d_gb": c.traffic_7d_gb,
+                    "last_activity_at": c.last_activity_at,
+                    "note": c.link.note,
+                    "tag": c.link.tag,
+                    "events": json.loads(c.events_json),
+                }
+            )
         return out
 
 
@@ -153,18 +159,106 @@ class ProviderFactory:
         return XrayProviderAdapter() if provider_name == "xray" else MockXrayAdapter()
 
 
+def list_notifications(db: Session, principal_id: str, unread_only: bool = False, limit: int = 100, offset: int = 0) -> list[dict]:
+    notification_read = aliased(NotificationRead)
+
+    query = (
+        db.query(Notification, notification_read.read_at.label("read_at"))
+        .outerjoin(
+            notification_read,
+            and_(
+                notification_read.notification_id == Notification.id,
+                notification_read.principal_id == principal_id,
+            ),
+        )
+        .order_by(Notification.created_at.desc())
+    )
+
+    if unread_only:
+        query = query.filter(notification_read.id.is_(None)).filter(Notification.is_read.is_(False))
+
+    rows = query.offset(offset).limit(limit).all()
+
+    items = []
+    for notification, read_at in rows:
+        items.append(
+            {
+                "id": notification.id,
+                "severity": notification.severity,
+                "title": notification.title,
+                "message": notification.message,
+                "entity_type": notification.entity_type,
+                "entity_id": notification.entity_id,
+                "is_read": bool(read_at),
+                "read_at": read_at,
+                "created_at": notification.created_at,
+            }
+        )
+    return items
+
+
+def mark_notification_read(db: Session, notification_id: int, principal_id: str) -> bool:
+    notification = db.query(Notification).filter(Notification.id == notification_id).first()
+    if not notification:
+        return False
+
+    existing = (
+        db.query(NotificationRead)
+        .filter(NotificationRead.notification_id == notification_id, NotificationRead.principal_id == principal_id)
+        .first()
+    )
+
+    if not existing:
+        db.add(
+            NotificationRead(
+                notification_id=notification_id,
+                principal_id=principal_id,
+                read_at=datetime.utcnow(),
+            )
+        )
+        db.commit()
+    return True
+
+
+def mark_all_notifications_read(db: Session, principal_id: str) -> int:
+    notification_ids = [row.id for row in db.query(Notification.id).all()]
+    if not notification_ids:
+        return 0
+
+    existing_ids = {
+        row.notification_id
+        for row in db.query(NotificationRead.notification_id).filter(NotificationRead.principal_id == principal_id).all()
+    }
+
+    created = 0
+    for notification_id in notification_ids:
+        if notification_id not in existing_ids:
+            db.add(
+                NotificationRead(
+                    notification_id=notification_id,
+                    principal_id=principal_id,
+                    read_at=datetime.utcnow(),
+                )
+            )
+            created += 1
+
+    if created:
+        db.commit()
+    return created
+
+
 def seed_if_empty(db: Session):
     if db.query(UserLink).count() > 0:
         return
     now = datetime.utcnow()
 
-    for role_key in ROLE_PERMISSIONS.keys():
+    for role_key in ROLE_PERMISSION_MAP.keys():
         db.add(Role(key=role_key, name=role_key.capitalize(), description="System role"))
-    permission_keys = sorted({p for perms in ROLE_PERMISSIONS.values() for p in perms})
+    permission_keys = sorted({p for perms in ROLE_PERMISSION_MAP.values() for p in perms})
     for p in permission_keys:
         db.add(Permission(key=p, description=f"Permission {p}"))
     db.flush()
-    for role_key, perms in ROLE_PERMISSIONS.items():
+    for role_key, perms in ROLE_PERMISSION_MAP.items():
         for p in perms:
             db.add(RolePermission(role_key=role_key, permission_key=p))
 

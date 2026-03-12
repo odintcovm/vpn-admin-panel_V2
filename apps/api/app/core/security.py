@@ -1,12 +1,12 @@
-from collections.abc import Callable
+import hashlib
+from dataclasses import dataclass
+from typing import FrozenSet
 
-from fastapi import Depends, Header, HTTPException
-from sqlalchemy.orm import Session
+from fastapi import Depends, Header, HTTPException, status
 
-from app.db.database import get_db
-from app.models.entities import RolePermission
+from app.core.config import Settings, get_settings
 
-ROLE_PERMISSIONS: dict[str, set[str]] = {
+ROLE_PERMISSION_MAP = {
     "owner": {
         "dashboard.read",
         "links.read",
@@ -77,28 +77,60 @@ ROLE_PERMISSIONS: dict[str, set[str]] = {
     },
 }
 
-
-def get_security_context(
-    x_role: str | None = Header(default=None),
-    db: Session = Depends(get_db),
-):
-    role = (x_role or "owner").lower()
-    if role not in ROLE_PERMISSIONS:
-        role = "owner"
-
-    db_permissions = {
-        rp.permission_key
-        for rp in db.query(RolePermission).filter(RolePermission.role_key == role).all()
-    }
-    permissions = db_permissions or ROLE_PERMISSIONS[role]
-
-    return {"role": role, "permissions": sorted(permissions)}
+VALID_ROLES = set(ROLE_PERMISSION_MAP.keys())
 
 
-def require_permission(permission: str) -> Callable:
-    def dependency(context: dict = Depends(get_security_context)):
-        if permission not in context["permissions"]:
-            raise HTTPException(status_code=403, detail=f"Missing permission: {permission}")
-        return context
+@dataclass(frozen=True)
+class SecurityPrincipal:
+    subject_id: str
+    role: str
+    permissions: FrozenSet[str]
+    token_fingerprint: str
+
+
+def _error(status_code: int, code: str, message: str) -> HTTPException:
+    return HTTPException(status_code=status_code, detail={"error": {"code": code, "message": message}})
+
+
+def _token_fingerprint(raw_token: str) -> str:
+    return hashlib.sha256(raw_token.encode("utf-8")).hexdigest()[:16]
+
+
+def _resolve_role(settings: Settings, x_role: str | None) -> str:
+    default_role = "owner"
+    if not x_role:
+        return default_role
+
+    if x_role not in VALID_ROLES:
+        raise _error(status.HTTP_400_BAD_REQUEST, "INVALID_ROLE", f"Unsupported role override: {x_role}")
+
+    if not settings.dev_role_emulation or not settings.is_dev_like:
+        raise _error(
+            status.HTTP_403_FORBIDDEN,
+            "DEV_ROLE_EMULATION_DISABLED",
+            "x-role override is disabled outside explicit development/test mode",
+        )
+    return x_role
+
+
+def get_current_principal(
+    x_api_token: str = Header(default=None, alias="x-api-token"),
+    x_role: str | None = Header(default=None, alias="x-role"),
+    settings: Settings = Depends(get_settings),
+) -> SecurityPrincipal:
+    if not x_api_token or x_api_token != settings.api_token:
+        raise _error(status.HTTP_401_UNAUTHORIZED, "INVALID_API_TOKEN", "Missing or invalid x-api-token")
+
+    role = _resolve_role(settings, x_role)
+    fingerprint = _token_fingerprint(x_api_token)
+    subject_id = f"token:{fingerprint}:{role}"
+    return SecurityPrincipal(subject_id=subject_id, role=role, permissions=frozenset(ROLE_PERMISSION_MAP[role]), token_fingerprint=fingerprint)
+
+
+def require_permission(permission_key: str):
+    def dependency(principal: SecurityPrincipal = Depends(get_current_principal)) -> SecurityPrincipal:
+        if permission_key not in principal.permissions:
+            raise _error(status.HTTP_403_FORBIDDEN, "PERMISSION_DENIED", f"Missing permission: {permission_key}")
+        return principal
 
     return dependency

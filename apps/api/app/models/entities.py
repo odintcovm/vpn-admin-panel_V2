@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.database import Base
@@ -92,8 +92,23 @@ class Notification(Base):
     message: Mapped[str] = mapped_column(Text, nullable=False)
     entity_type: Mapped[str | None] = mapped_column(String(32), nullable=True)
     entity_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # legacy fallback, keep for backward compatibility
     is_read: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    reads = relationship("NotificationRead", back_populates="notification", cascade="all, delete-orphan")
+
+
+class NotificationRead(Base):
+    __tablename__ = "notification_reads"
+    __table_args__ = (UniqueConstraint("notification_id", "principal_id", name="uq_notification_reads_notification_principal"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    notification_id: Mapped[int] = mapped_column(ForeignKey("notifications.id", ondelete="CASCADE"), nullable=False)
+    principal_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    read_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    notification = relationship("Notification", back_populates="reads")
 
 
 class TrafficSnapshot(Base):

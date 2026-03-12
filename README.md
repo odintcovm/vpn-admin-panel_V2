@@ -2,10 +2,11 @@
 
 Лёгкая, аккуратная админ-панель для управления **одним Xray/VLESS сервером** на одном VPS.
 
-## Что реализовано в Foundation Sprint
+## Что реализовано в Foundation + Hardening Sprint
 - RBAC scaffolding (roles/permissions + backend guards)
+- Hardening для `x-role` dev-эмуляции (явный флаг + запрет вне dev/test)
 - Unified UI states framework (loading/empty/error/retry/skeleton/inline notice)
-- Persistent Notification Center (read/unread + mark all)
+- Persistent Notification Center с per-principal read-state
 - Sessions API + отдельная страница Sessions
 - CI baseline (GitHub Actions)
 - DB migration baseline (Alembic)
@@ -53,18 +54,47 @@ docker compose up --build
 - API: http://localhost:8000
 - Web: http://localhost:5173
 
-## Миграции
+## Миграции и управление схемой
+
+Основной режим: **migration-first через Alembic**.
+
 ```bash
 cd apps/api
 python -m alembic upgrade head
 python -m alembic downgrade -1
 ```
 
-## RBAC совместимость с x-api-token
+Переменная `SCHEMA_MANAGEMENT_MODE`:
+- `alembic` (по умолчанию) — безопасный режим, `create_all()` не вызывается.
+- `bootstrap` — одноразовый локальный bootstrap (не использовать в staging/production).
+
+## RBAC и безопасность
+
+### Совместимость с `x-api-token`
 - Текущий `x-api-token` механизм сохранён.
 - По умолчанию токен маппится на privileged context (`owner`) в token-only режиме.
-- Для проверки ограничений в development можно передавать `x-role: owner|admin|operator|readonly`.
-- Endpoint для проверки контекста: `GET /api/auth/me`.
+
+### `x-role` (только для dev/test)
+Role emulation включается **только** при одновременном выполнении условий:
+- `APP_ENV` в dev-like окружении (`development/dev/local/test`)
+- `DEV_ROLE_EMULATION=true`
+
+Иначе передача заголовка `x-role` вернёт:
+- `403`
+- `error.code = DEV_ROLE_EMULATION_DISABLED`
+
+Проверка текущего security context:
+- `GET /api/auth/me`
+- возвращает `subject_id`, `role`, `permissions`, `dev_role_emulation_enabled`
+
+## Notification Center
+- Уведомления хранятся в таблице `notifications`.
+- Статус прочтения хранится **per-principal** в `notification_reads`.
+- Поддерживаются endpoints:
+  - `GET /api/notifications`
+  - `POST /api/notifications/{id}/read`
+  - `POST /api/notifications/read-all`
+- SSE поток `/api/events/stream` сохранён (mock/live signal).
 
 ## API surface (актуально)
 - `GET /api/auth/me`
@@ -92,17 +122,28 @@ python -m alembic downgrade -1
 - `POST /api/notifications/read-all`
 - `GET /api/events/stream`
 
-## UI
-- Notification Center открывается кнопкой "Уведомления" в header.
-- Отдельная вкладка "Сессии" для активных/завершённых сессий.
-
 ## CI
 GitHub Actions workflow `.github/workflows/ci.yml` проверяет:
 - frontend install + build/typecheck
 - backend install
-- backend smoke tests (pytest)
+- backend tests (`pytest`)
+
+## Обязательные команды после pull
+```bash
+# backend
+cd apps/api
+pip install -r requirements.txt
+python -m alembic upgrade head
+pytest -q
+
+# frontend
+cd ../web
+npm install
+npm run build
+```
 
 ## Ограничения текущего этапа
 - Полный auth lifecycle (`/auth/login`, refresh, logout) ещё не внедрён
 - Real Xray integration остаётся scaffold
+- SSE сейчас mock-driven, не полный event bus от real backend telemetry
 - Advanced alerts engine и export center — в следующих спринтах
