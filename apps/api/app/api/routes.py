@@ -10,19 +10,24 @@ from sqlalchemy.orm import Session
 from app.core.config import get_settings
 from app.core.security import SecurityPrincipal, get_current_principal, require_permission
 from app.db.database import get_db
-from app.models.entities import AdminActionLog, ServerStatus, SessionRecord, SystemEvent, UserLink
+from app.models.entities import AdminActionLog, ClientSession, ServerStatus, SessionRecord, SystemEvent, UserLink
 from app.schemas.api import (
+    ActionExecuteIn,
+    ActionExecuteOut,
     ActionLogOut,
     AuthMeOut,
     ClientOut,
     DashboardOverview,
     EventOut,
+    HealthFreshnessOut,
     LinkCreate,
     LinkOut,
     LinkUpdate,
     NotificationOut,
     ServerStatusOut,
+    SessionDrilldownOut,
     SessionOut,
+    TimelineEventOut,
 )
 from app.services import services
 from app.services.services import ClientService, LinkService, LogService, ProviderFactory, StatsService
@@ -49,6 +54,97 @@ def auth_me(principal: SecurityPrincipal = Depends(get_current_principal)):
         user_id=principal.user_id,
         dev_role_emulation_enabled=settings.dev_role_emulation and settings.is_dev_like,
     )
+
+
+@router.get("/system/health", response_model=HealthFreshnessOut)
+def system_health(
+    db: Session = Depends(get_db),
+    _: SecurityPrincipal = Depends(require_permission("dashboard.read")),
+):
+    status_row = db.query(ServerStatus).first()
+    action = db.query(AdminActionLog).order_by(AdminActionLog.created_at.desc()).first()
+    last_refresh = action.created_at if action else datetime.utcnow()
+    freshness = int((datetime.utcnow() - last_refresh).total_seconds())
+    return HealthFreshnessOut(
+        provider_status="healthy" if freshness < 120 else "degraded",
+        backend_status="ok" if status_row else "degraded",
+        server_status=status_row.service_status if status_row else "unknown",
+        last_success_refresh_at=last_refresh,
+        data_freshness_sec=freshness,
+    )
+
+
+@router.post("/actions/execute", response_model=ActionExecuteOut)
+def execute_action(
+    payload: ActionExecuteIn,
+    db: Session = Depends(get_db),
+    principal: SecurityPrincipal = Depends(get_current_principal),
+):
+    permission_map = {
+        "restart": "server.restart",
+        "reload": "server.reload",
+        "regenerate_uuid": "links.regenerate",
+        "set_link_enabled": "links.write",
+        "mark_suspicious": "clients.mark_suspicious",
+    }
+    needed = permission_map[payload.action]
+    if needed not in principal.permissions:
+        raise HTTPException(status_code=403, detail={"error": {"code": "PERMISSION_DENIED", "message": f"Missing permission: {needed}"}})
+
+    reason = payload.reason or "no-reason"
+    at = datetime.utcnow()
+
+    if payload.action == "restart":
+        adapter = ProviderFactory.get(get_settings().app_provider)
+        result = adapter.restart()
+        db.add(AdminActionLog(action=f"Restart Xray ({reason})", status="success", meta="{}"))
+        db.commit()
+        return ActionExecuteOut(ok=True, action=payload.action, result=result, at=at)
+
+    if payload.action == "reload":
+        adapter = ProviderFactory.get(get_settings().app_provider)
+        result = adapter.reload()
+        db.add(AdminActionLog(action=f"Reload Xray ({reason})", status="success", meta="{}"))
+        db.commit()
+        return ActionExecuteOut(ok=True, action=payload.action, result=result, at=at)
+
+    if payload.action == "regenerate_uuid":
+        if payload.target_id is None:
+            raise HTTPException(status_code=400, detail={"error": {"code": "TARGET_ID_REQUIRED", "message": "target_id is required"}})
+        link = db.query(UserLink).filter(UserLink.id == payload.target_id).first()
+        if not link:
+            _not_found("LINK_NOT_FOUND", "Link not found")
+        LinkService(db).regenerate(link)
+        db.add(AdminActionLog(action=f"Regenerate UUID for link {payload.target_id} ({reason})", status="success", meta="{}"))
+        db.commit()
+        return ActionExecuteOut(ok=True, action=payload.action, result="UUID regenerated", at=at)
+
+    if payload.action == "set_link_enabled":
+        if payload.target_id is None or payload.enabled is None:
+            raise HTTPException(status_code=400, detail={"error": {"code": "INVALID_ACTION_INPUT", "message": "target_id and enabled are required"}})
+        link = db.query(UserLink).filter(UserLink.id == payload.target_id).first()
+        if not link:
+            _not_found("LINK_NOT_FOUND", "Link not found")
+        link.enabled = payload.enabled
+        db.add(AdminActionLog(action=f"Set link {payload.target_id} enabled={payload.enabled} ({reason})", status="success", meta="{}"))
+        db.commit()
+        return ActionExecuteOut(ok=True, action=payload.action, result="Link state updated", at=at)
+
+    if payload.action == "mark_suspicious":
+        if payload.target_id is None:
+            raise HTTPException(status_code=400, detail={"error": {"code": "TARGET_ID_REQUIRED", "message": "target_id is required"}})
+        client = db.query(ClientSession).filter(ClientSession.id == payload.target_id).first()
+        if not client:
+            _not_found("CLIENT_NOT_FOUND", "Client not found")
+        events = json.loads(client.events_json)
+        events.insert(0, {"type": "suspicious", "label": "Помечено как подозрительное", "time": "только что"})
+        client.events_json = json.dumps(events)
+        db.add(SystemEvent(level="warning", title="Клиент помечен как подозрительный", message=f"{client.client_name} ({reason})"))
+        db.add(AdminActionLog(action=f"Mark suspicious client {payload.target_id} ({reason})", status="success", meta="{}"))
+        db.commit()
+        return ActionExecuteOut(ok=True, action=payload.action, result="Client marked suspicious", at=at)
+
+    raise HTTPException(status_code=400, detail={"error": {"code": "UNSUPPORTED_ACTION", "message": "Unsupported action"}})
 
 
 @router.get("/dashboard/overview", response_model=DashboardOverview)
@@ -154,6 +250,46 @@ def session_detail(session_id: int, db: Session = Depends(get_db), _: SecurityPr
     if not session:
         _not_found("SESSION_NOT_FOUND", "Session not found")
     return session
+
+
+@router.get("/sessions/{session_id}/drilldown", response_model=SessionDrilldownOut)
+def session_drilldown(session_id: int, db: Session = Depends(get_db), _: SecurityPrincipal = Depends(require_permission("sessions.read"))):
+    session = db.query(SessionRecord).filter(SessionRecord.id == session_id).first()
+    if not session:
+        _not_found("SESSION_NOT_FOUND", "Session not found")
+
+    related_events = db.query(SystemEvent).order_by(SystemEvent.created_at.desc()).limit(5).all()
+    return SessionDrilldownOut(
+        id=session.id,
+        client_name=session.client_name,
+        link_name=session.link_name,
+        source_ip=session.source_ip,
+        status=session.status,
+        started_at=session.started_at,
+        duration_sec=session.duration_sec,
+        inbound_gb=session.inbound_gb,
+        outbound_gb=session.outbound_gb,
+        reconnect_summary="Зафиксированы эпизоды reconnect в течение последних 24ч",
+        related_events=[
+            {"title": e.title, "message": e.message, "level": e.level, "created_at": e.created_at.isoformat()}
+            for e in related_events
+        ],
+    )
+
+
+@router.get("/timeline/sessions/{session_id}", response_model=list[TimelineEventOut])
+def session_timeline(session_id: int, db: Session = Depends(get_db), _: SecurityPrincipal = Depends(require_permission("sessions.read"))):
+    session = db.query(SessionRecord).filter(SessionRecord.id == session_id).first()
+    if not session:
+        _not_found("SESSION_NOT_FOUND", "Session not found")
+    events = [
+        TimelineEventOut(at=session.started_at, kind="session", title="Сессия запущена", message=f"IP {session.source_ip}"),
+        TimelineEventOut(at=datetime.utcnow(), kind="traffic", title="Трафик", message=f"IN {session.inbound_gb:.2f} GB / OUT {session.outbound_gb:.2f} GB"),
+    ]
+    for event in db.query(SystemEvent).order_by(SystemEvent.created_at.desc()).limit(3).all():
+        events.append(TimelineEventOut(at=event.created_at, kind="system", title=event.title, message=event.message))
+    events.sort(key=lambda x: x.at, reverse=True)
+    return events
 
 
 @router.get("/server/status", response_model=ServerStatusOut)

@@ -53,6 +53,26 @@ export type SessionItem = {
   outbound_gb: number
 }
 
+export type SessionDrilldown = SessionItem & {
+  reconnect_summary: string
+  related_events: { title: string; message: string; level: string; created_at: string }[]
+}
+
+export type TimelineEvent = {
+  at: string
+  kind: string
+  title: string
+  message: string
+}
+
+export type HealthFreshness = {
+  provider_status: 'healthy' | 'degraded' | 'disconnected'
+  backend_status: 'ok' | 'degraded' | 'error'
+  server_status: string
+  last_success_refresh_at: string
+  data_freshness_sec: number
+}
+
 export type NotificationItem = {
   id: number
   severity: string
@@ -72,6 +92,21 @@ export type AuthMe = {
   auth_mode: string
   user_id?: number | null
   dev_role_emulation_enabled: boolean
+}
+
+export type ActionExecuteIn = {
+  action: 'restart' | 'reload' | 'regenerate_uuid' | 'set_link_enabled' | 'mark_suspicious'
+  target_type: 'server' | 'link' | 'client'
+  target_id?: number
+  reason?: string
+  enabled?: boolean
+}
+
+export type ActionExecuteOut = {
+  ok: boolean
+  action: string
+  result: string
+  at: string
 }
 
 export type ServerStatus = {

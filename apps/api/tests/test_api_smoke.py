@@ -203,3 +203,41 @@ def test_alembic_upgrade_head_creates_core_tables(tmp_path):
     assert "notification_reads" in tables
     assert "user_links" in tables
     assert "users" in tables
+
+
+def test_system_health_endpoint():
+    with TestClient(app) as client:
+        response = client.get("/api/system/health", headers=BASE_HEADERS)
+    assert response.status_code == 200
+    payload = response.json()
+    assert "provider_status" in payload
+    assert "last_success_refresh_at" in payload
+
+
+def test_action_execute_restart_and_mark_suspicious(monkeypatch):
+    monkeypatch.setenv("APP_ENV", "development")
+    monkeypatch.setenv("DEV_ROLE_EMULATION", "true")
+    _reset_settings_cache()
+
+    with TestClient(app) as client:
+        restart = client.post("/api/actions/execute", headers=_headers("admin"), json={"action": "reload", "target_type": "server", "reason": "smoke"})
+        assert restart.status_code == 200
+
+        clients = client.get("/api/clients", headers=_headers("operator")).json()
+        assert clients
+        mark = client.post("/api/actions/execute", headers=_headers("operator"), json={"action": "mark_suspicious", "target_type": "client", "target_id": clients[0]["id"], "reason": "smoke"})
+        assert mark.status_code == 200
+
+
+def test_sessions_drilldown_and_timeline():
+    with TestClient(app) as client:
+        sessions = client.get("/api/sessions", headers=BASE_HEADERS).json()
+        assert sessions
+        sid = sessions[0]["id"]
+        detail = client.get(f"/api/sessions/{sid}/drilldown", headers=BASE_HEADERS)
+        timeline = client.get(f"/api/timeline/sessions/{sid}", headers=BASE_HEADERS)
+
+    assert detail.status_code == 200
+    assert "reconnect_summary" in detail.json()
+    assert timeline.status_code == 200
+    assert isinstance(timeline.json(), list)

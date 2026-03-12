@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -77,6 +77,18 @@ class SessionOut(BaseModel):
     outbound_gb: float
 
 
+class SessionDrilldownOut(SessionOut):
+    reconnect_summary: str
+    related_events: list[dict[str, Any]]
+
+
+class TimelineEventOut(BaseModel):
+    at: datetime
+    kind: str
+    title: str
+    message: str
+
+
 class NotificationOut(BaseModel):
     id: int
     severity: str
@@ -97,6 +109,14 @@ class ServerStatusOut(BaseModel):
     domain: str
     port: int
     config_summary: dict[str, Any]
+
+
+class HealthFreshnessOut(BaseModel):
+    provider_status: Literal["healthy", "degraded", "disconnected"]
+    backend_status: Literal["ok", "degraded", "error"]
+    server_status: str
+    last_success_refresh_at: datetime
+    data_freshness_sec: int
 
 
 class EventOut(BaseModel):
@@ -122,3 +142,18 @@ class AuthMeOut(BaseModel):
     auth_mode: str
     user_id: int | None = None
     dev_role_emulation_enabled: bool
+
+
+class ActionExecuteIn(BaseModel):
+    action: Literal["restart", "reload", "regenerate_uuid", "set_link_enabled", "mark_suspicious"]
+    target_type: Literal["server", "link", "client"]
+    target_id: int | None = None
+    reason: str | None = Field(default=None, max_length=240)
+    enabled: bool | None = None
+
+
+class ActionExecuteOut(BaseModel):
+    ok: bool
+    action: str
+    result: str
+    at: datetime

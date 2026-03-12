@@ -2,12 +2,26 @@ import { useEffect, useMemo, useState } from 'react'
 import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { Badge, Button, Card, EmptyState, ErrorState, InlineNotice, Input, LoadingState, Modal, SectionTitle, SkeletonBlock } from './components/ui'
 import { apiFetch, apiToken, cn } from './lib/utils'
-import type { Client, Link, NotificationItem, Overview, ServerStatus, SessionItem } from './types/api'
+import type {
+  ActionExecuteIn,
+  ActionExecuteOut,
+  Client,
+  HealthFreshness,
+  Link,
+  NotificationItem,
+  Overview,
+  ServerStatus,
+  SessionDrilldown,
+  SessionItem,
+  TimelineEvent
+} from './types/api'
 
 type TabKey = 'dashboard' | 'links' | 'clients' | 'sessions' | 'settings'
 type EventItem = { id: number; title: string; message: string; level: string; created_at: string }
 type LogItem = { id: number; action: string; status: string; created_at: string }
 type PushNotice = { id: number; title: string; message: string; tone: 'info' | 'warning' }
+
+type SavedView = { name: string; query: string; status: string }
 
 const statusLabel: Record<string, string> = { active: 'Активен', idle: 'Неактивен', disabled: 'Отключен', running: 'Работает', closed: 'Завершена' }
 const dateTime = new Intl.DateTimeFormat('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
@@ -15,6 +29,24 @@ const dateTime = new Intl.DateTimeFormat('ru-RU', { day: '2-digit', month: '2-di
 function formatTraffic(value: number) { return `${value.toFixed(1)} GB` }
 function formatDate(value?: string | null) { if (!value) return '—'; return dateTime.format(new Date(value)) }
 function toneByStatus(status?: string) { if (status === 'active' || status === 'running') return 'success'; if (status === 'disabled') return 'danger'; if (status === 'idle' || status === 'closed') return 'default'; return 'info' }
+
+const defaults: Record<TabKey, SavedView[]> = {
+  dashboard: [],
+  links: [{ name: 'Отключённые', query: '', status: 'disabled' }, { name: 'Активные', query: '', status: 'active' }],
+  clients: [{ name: 'Подозрительные', query: 'suspicious', status: 'all' }],
+  sessions: [{ name: 'Активные сейчас', query: '', status: 'active' }, { name: 'Завершённые', query: '', status: 'closed' }],
+  settings: []
+}
+
+function loadViews(tab: TabKey): SavedView[] {
+  const raw = localStorage.getItem(`views:${tab}`)
+  if (!raw) return defaults[tab]
+  try { return JSON.parse(raw) as SavedView[] } catch { return defaults[tab] }
+}
+
+function saveViews(tab: TabKey, views: SavedView[]) {
+  localStorage.setItem(`views:${tab}`, JSON.stringify(views))
+}
 
 export function App() {
   const [tab, setTab] = useState<TabKey>('dashboard')
@@ -26,6 +58,10 @@ export function App() {
   const [events, setEvents] = useState<EventItem[]>([])
   const [logs, setLogs] = useState<LogItem[]>([])
   const [notifications, setNotifications] = useState<NotificationItem[]>([])
+  const [health, setHealth] = useState<HealthFreshness | null>(null)
+  const [sseState, setSseState] = useState<'connected' | 'disconnected'>('disconnected')
+  const [lastRefreshAt, setLastRefreshAt] = useState<string | null>(null)
+
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
@@ -35,21 +71,35 @@ export function App() {
   const [openCreate, setOpenCreate] = useState(false)
   const [openNotifications, setOpenNotifications] = useState(false)
 
+  const [openAction, setOpenAction] = useState(false)
+  const [actionPayload, setActionPayload] = useState<ActionExecuteIn | null>(null)
+  const [actionReason, setActionReason] = useState('')
+  const [actionRunning, setActionRunning] = useState(false)
+
+  const [selectedSessionId, setSelectedSessionId] = useState<number | null>(null)
+  const [sessionDrilldown, setSessionDrilldown] = useState<SessionDrilldown | null>(null)
+  const [sessionTimeline, setSessionTimeline] = useState<TimelineEvent[]>([])
+  const [sessionDrilldownLoading, setSessionDrilldownLoading] = useState(false)
+
+  const [savedViews, setSavedViews] = useState<SavedView[]>(() => loadViews(tab))
+
   async function load() {
     setLoading(true)
     setError(null)
     try {
-      const [ov, ls, cs, ss, sv, ev, lg, nt] = await Promise.all([
+      const [ov, ls, cs, ss, sv, ev, lg, nt, hl] = await Promise.all([
         apiFetch<Overview>('/api/dashboard/overview'),
         apiFetch<Link[]>('/api/links'),
         apiFetch<Client[]>('/api/clients'),
-        apiFetch<SessionItem[]>('/api/sessions/active'),
+        apiFetch<SessionItem[]>('/api/sessions'),
         apiFetch<ServerStatus>('/api/server/status'),
         apiFetch<EventItem[]>('/api/events'),
         apiFetch<LogItem[]>('/api/activity-log'),
-        apiFetch<NotificationItem[]>('/api/notifications')
+        apiFetch<NotificationItem[]>('/api/notifications'),
+        apiFetch<HealthFreshness>('/api/system/health')
       ])
-      setOverview(ov); setLinks(ls); setClients(cs); setSessions(ss); setServer(sv); setEvents(ev); setLogs(lg); setNotifications(nt)
+      setOverview(ov); setLinks(ls); setClients(cs); setSessions(ss); setServer(sv); setEvents(ev); setLogs(lg); setNotifications(nt); setHealth(hl)
+      setLastRefreshAt(new Date().toISOString())
     } catch (e) {
       setError((e as Error).message)
     } finally {
@@ -58,9 +108,14 @@ export function App() {
   }
 
   useEffect(() => {
+    setSavedViews(loadViews(tab))
+  }, [tab])
+
+  useEffect(() => {
     load()
     const base = import.meta.env.VITE_API_URL ?? 'http://localhost:8000'
     const src = new EventSource(`${base}/api/events/stream?token=${apiToken}`)
+    src.onopen = () => setSseState('connected')
     src.onmessage = (event) => {
       if (!pushEnabled) return
       try {
@@ -80,96 +135,198 @@ export function App() {
           const incomingPush: PushNotice = { id: Date.now(), title: payload.title, message: payload.message, tone }
           setPushNotices((prev) => [incomingPush, ...prev].slice(0, 4))
           setNotifications((prev) => [incomingNotification, ...prev])
+          setLastRefreshAt(new Date().toISOString())
         }
       } catch {}
-      void load()
     }
-    src.onerror = () => src.close()
+    src.onerror = () => {
+      setSseState('disconnected')
+      src.close()
+    }
     return () => src.close()
   }, [pushEnabled])
 
-  useEffect(() => { if (!notice) return; const t = setTimeout(() => setNotice(null), 2200); return () => clearTimeout(t) }, [notice])
+  useEffect(() => { if (!notice) return; const t = setTimeout(() => setNotice(null), 2500); return () => clearTimeout(t) }, [notice])
   useEffect(() => { if (!pushNotices.length) return; const t = setTimeout(() => setPushNotices((prev) => prev.slice(0, -1)), 6000); return () => clearTimeout(t) }, [pushNotices])
 
   const chartData = useMemo(() => (period === '24h' ? overview?.chart_24h ?? [] : overview?.chart_7d ?? []), [period, overview])
 
+  const freshnessState = useMemo(() => {
+    if (!health) return { tone: 'warn' as const, text: 'Нет данных состояния' }
+    if (sseState === 'disconnected') return { tone: 'danger' as const, text: 'Live stream отключён' }
+    if (health.provider_status !== 'healthy' || health.backend_status !== 'ok') return { tone: 'warn' as const, text: 'Degraded состояние данных' }
+    if (health.data_freshness_sec > 120) return { tone: 'warn' as const, text: 'Данные устарели' }
+    return { tone: 'info' as const, text: 'Данные актуальны' }
+  }, [health, sseState])
+
+  function openActionCenter(payload: ActionExecuteIn) {
+    setActionPayload(payload)
+    setActionReason('')
+    setOpenAction(true)
+  }
+
+  async function runAction() {
+    if (!actionPayload) return
+    setActionRunning(true)
+    try {
+      const result = await apiFetch<ActionExecuteOut>('/api/actions/execute', {
+        method: 'POST',
+        body: JSON.stringify({ ...actionPayload, reason: actionReason || undefined })
+      })
+      setNotice(`Успешно: ${result.result}`)
+      setOpenAction(false)
+      await load()
+    } catch (e) {
+      setNotice(`Ошибка: ${(e as Error).message}`)
+    } finally {
+      setActionRunning(false)
+    }
+  }
+
+  async function openSession(id: number) {
+    setSelectedSessionId(id)
+    setSessionDrilldownLoading(true)
+    try {
+      const [drilldown, timeline] = await Promise.all([
+        apiFetch<SessionDrilldown>(`/api/sessions/${id}/drilldown`),
+        apiFetch<TimelineEvent[]>(`/api/timeline/sessions/${id}`)
+      ])
+      setSessionDrilldown(drilldown)
+      setSessionTimeline(timeline)
+    } catch {
+      setSessionDrilldown(null)
+      setSessionTimeline([])
+    } finally {
+      setSessionDrilldownLoading(false)
+    }
+  }
+
+  function addSavedView(view: SavedView) {
+    const updated = [view, ...savedViews]
+    setSavedViews(updated)
+    saveViews(tab, updated)
+    setNotice('Представление сохранено')
+  }
+
   return (
     <div className="min-h-screen bg-bg p-4 font-['Inter'] text-slate-100 md:p-6">
       <div className="mx-auto max-w-7xl space-y-5">
-        <header className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-border bg-panel p-4 shadow-soft">
-          <div><h1 className="text-xl font-semibold md:text-2xl">Панель управления Xray / VLESS</h1><p className="text-sm text-muted">Foundation Sprint baseline</p></div>
-          <nav className="flex flex-wrap gap-2">
-            {([['dashboard','Дашборд'],['links','VLESS ссылки'],['clients','Клиенты'],['sessions','Сессии'],['settings','Настройки']] as const).map(([k,l]) => (
-              <button key={k} onClick={() => setTab(k)} className={cn('rounded-xl px-3 py-2 text-sm transition', tab===k ? 'bg-indigo-500 text-white':'bg-slate-700/40 text-slate-200 hover:bg-slate-700/70')}>{l}</button>
-            ))}
-          </nav>
-          <div className="flex gap-2"><Button variant="ghost" onClick={() => setPushEnabled((v)=>!v)}>{pushEnabled ? 'Push: Вкл':'Push: Выкл'}</Button><Button variant="secondary" onClick={() => setOpenNotifications(true)}>Уведомления ({notifications.filter(n=>!n.is_read).length})</Button></div>
+        <header className="space-y-3 rounded-2xl border border-border bg-panel p-4 shadow-soft">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div><h1 className="text-xl font-semibold md:text-2xl">Панель управления Xray / VLESS</h1><p className="text-sm text-muted">UX stabilization sprint</p></div>
+            <nav className="flex flex-wrap gap-2">
+              {([['dashboard','Дашборд'],['links','VLESS ссылки'],['clients','Клиенты'],['sessions','Сессии'],['settings','Настройки']] as const).map(([k,label]) => <Button key={k} variant={tab===k?'primary':'secondary'} onClick={() => setTab(k)}>{label}</Button>)}
+            </nav>
+          </div>
+          <div className="grid gap-2 rounded-xl border border-border bg-bg p-3 md:grid-cols-5">
+            <div className="md:col-span-2"><span className="text-xs text-muted">Health/Freshness</span><p className="text-sm"><Badge tone={freshnessState.tone}>{freshnessState.text}</Badge></p></div>
+            <div><span className="text-xs text-muted">Xray/Provider</span><p className="text-sm">{health?.server_status ?? 'unknown'} / {health?.provider_status ?? 'unknown'}</p></div>
+            <div><span className="text-xs text-muted">SSE</span><p className="text-sm"><Badge tone={sseState === 'connected' ? 'success' : 'danger'}>{sseState === 'connected' ? 'connected' : 'disconnected'}</Badge></p></div>
+            <div><span className="text-xs text-muted">Последнее обновление</span><p className="text-sm">{formatDate(lastRefreshAt)}</p></div>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <Button variant="ghost" onClick={() => setPushEnabled((v)=>!v)}>{pushEnabled ? 'Push: Вкл':'Push: Выкл'}</Button>
+            <Button variant="secondary" onClick={() => setOpenNotifications(true)}>Уведомления ({notifications.filter(n=>!n.is_read).length})</Button>
+            <Button variant="secondary" onClick={() => openActionCenter({ action: 'reload', target_type: 'server' })}>Action Center: Reload</Button>
+            <Button variant="danger" onClick={() => openActionCenter({ action: 'restart', target_type: 'server' })}>Action Center: Restart</Button>
+          </div>
         </header>
 
-        {notice && <InlineNotice text={notice} tone="info" />}
-        {error && <ErrorState message={`Ошибка загрузки: ${error}`} onRetry={load} />}
+        {notice && <InlineNotice tone={notice.startsWith('Ошибка') ? 'danger' : 'info'} text={notice} />}
+        {error && <ErrorState message={error} onRetry={load} />}
         {loading && <SkeletonBlock rows={6} />}
 
-        {!loading && tab === 'dashboard' && (
-          <div className="space-y-4">
-            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-              <KpiCard title="Всего ссылок" value={String(overview?.total_links ?? 0)} subtitle="Активных и резервных" />
-              <KpiCard title="Активные подключения" value={String(overview?.active_connections ?? 0)} subtitle="Онлайн сейчас" />
-              <KpiCard title="Трафик за 24ч" value={formatTraffic(overview?.traffic_24h_gb ?? 0)} subtitle="Суммарно" />
-              <Card><SectionTitle title="Статус Xray" subtitle="Текущее состояние" /><Badge tone={toneByStatus(overview?.server_status) as any}>{statusLabel[overview?.server_status ?? ''] ?? overview?.server_status ?? 'unknown'}</Badge></Card>
-            </div>
-            <Card><div className="mb-3 flex items-center justify-between"><SectionTitle title="График трафика" subtitle="24ч/7д" /><div className="flex gap-2"><Button variant={period==='24h'?'primary':'secondary'} onClick={()=>setPeriod('24h')}>24 часа</Button><Button variant={period==='7d'?'primary':'secondary'} onClick={()=>setPeriod('7d')}>7 дней</Button></div></div><div className="h-64">{chartData.length===0 ? <EmptyState title="Нет данных" subtitle="Ожидаем трафик" /> : <ResponsiveContainer width="100%" height="100%"><AreaChart data={chartData}><CartesianGrid stroke="#24324f" strokeDasharray="3 3" /><XAxis dataKey="label" stroke="#8ea0c8" /><YAxis stroke="#8ea0c8" /><Tooltip /><Area type="monotone" dataKey="value" stroke="#818cf8" fill="#6366f133" /></AreaChart></ResponsiveContainer>}</div></Card>
-          </div>
+        {!loading && !error && overview && (
+          <>
+            {tab === 'dashboard' && (
+              <div className="grid gap-3 lg:grid-cols-4">
+                <Card><SectionTitle title="Ссылки" /><p className="text-2xl font-semibold">{overview.total_links}</p></Card>
+                <Card><SectionTitle title="Активные подключения" /><p className="text-2xl font-semibold">{overview.active_connections}</p></Card>
+                <Card><SectionTitle title="Трафик 24ч" /><p className="text-2xl font-semibold">{overview.traffic_24h_gb.toFixed(1)} GB</p></Card>
+                <Card><SectionTitle title="Сервер" /><Badge tone={toneByStatus(overview.server_status) as any}>{statusLabel[overview.server_status] ?? overview.server_status}</Badge></Card>
+                <Card className="lg:col-span-4">
+                  <div className="mb-2 flex items-center justify-between"><SectionTitle title="Трафик" subtitle="Freshness-aware"/><div className="flex gap-2"><Button variant={period==='24h'?'primary':'secondary'} onClick={()=>setPeriod('24h')}>24ч</Button><Button variant={period==='7d'?'primary':'secondary'} onClick={()=>setPeriod('7d')}>7д</Button></div></div>
+                  <div className="h-64"><ResponsiveContainer width="100%" height="100%"><AreaChart data={chartData}><defs><linearGradient id="traffic" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="#6366f1" stopOpacity={0.6}/><stop offset="95%" stopColor="#6366f1" stopOpacity={0.05}/></linearGradient></defs><CartesianGrid stroke="rgba(148,163,184,0.12)"/><XAxis dataKey="label" stroke="#94a3b8"/><YAxis stroke="#94a3b8"/><Tooltip/><Area type="monotone" dataKey="value" stroke="#818cf8" fill="url(#traffic)"/></AreaChart></ResponsiveContainer></div>
+                </Card>
+              </div>
+            )}
+
+            {tab === 'links' && <LinksView links={links} openActionCenter={openActionCenter} addSavedView={addSavedView} savedViews={savedViews} />}
+            {tab === 'clients' && <ClientsView clients={clients} openActionCenter={openActionCenter} addSavedView={addSavedView} savedViews={savedViews} />}
+            {tab === 'sessions' && <SessionsView sessions={sessions} onOpenSession={openSession} addSavedView={addSavedView} savedViews={savedViews} />}
+            {tab === 'settings' && <SettingsView server={server} logs={logs} />}
+          </>
         )}
 
-        {!loading && tab === 'links' && <LinksView links={links} reload={load} onCreate={() => setOpenCreate(true)} setNotice={setNotice} />}
-        {!loading && tab === 'clients' && <ClientsView clients={clients} />}
-        {!loading && tab === 'sessions' && <SessionsView sessions={sessions} onReload={load} />}
-        {!loading && tab === 'settings' && <SettingsView server={server} logs={logs} />}
+        <CreateLinkModal open={openCreate} onOpenChange={setOpenCreate} onDone={load} />
+        <NotificationCenter open={openNotifications} onOpenChange={setOpenNotifications} notifications={notifications} onRead={async (id)=>{await apiFetch(`/api/notifications/${id}/read`,{method:'POST'}); await load()}} onReadAll={async ()=>{await apiFetch('/api/notifications/read-all',{method:'POST'}); await load()}} />
+        <ActionCenterModal open={openAction} onOpenChange={setOpenAction} payload={actionPayload} reason={actionReason} setReason={setActionReason} onConfirm={runAction} running={actionRunning} />
+        <SessionDrilldownDrawer open={selectedSessionId !== null} onOpenChange={(v) => !v && setSelectedSessionId(null)} loading={sessionDrilldownLoading} data={sessionDrilldown} timeline={sessionTimeline} onGoLink={() => setTab('links')} onGoClient={() => setTab('clients')} />
+
+        <div className="pointer-events-none fixed right-4 top-4 z-40 space-y-2">
+          {pushNotices.map((n)=><div key={n.id} className={cn('pointer-events-auto w-80 rounded-xl border p-3 shadow-soft', n.tone==='warning' ? 'border-amber-400/40 bg-amber-500/10':'border-indigo-400/40 bg-indigo-500/10')}><p className="text-sm font-semibold">{n.title}</p><p className="text-xs text-muted">{n.message}</p></div>)}
+        </div>
       </div>
-
-      <CreateLinkModal open={openCreate} onOpenChange={setOpenCreate} onDone={() => { setNotice('Ссылка создана'); return load() }} />
-      <NotificationCenter open={openNotifications} onOpenChange={setOpenNotifications} notifications={notifications} onRead={async (id)=>{await apiFetch(`/api/notifications/${id}/read`,{method:'POST'}); await load()}} onReadAll={async ()=>{await apiFetch('/api/notifications/read-all',{method:'POST'}); await load()}} />
-
-      {pushNotices.length > 0 && <div className="fixed right-4 top-4 z-30 w-[min(92vw,360px)] space-y-2">{pushNotices.map((n)=><div key={n.id} className="rounded-xl border border-border bg-panel p-3 shadow-soft"><Badge tone={n.tone==='warning'?'warn':'info'}>{n.tone==='warning'?'Внимание':'Уведомление'}</Badge><p className="mt-1 text-sm font-medium">{n.title}</p><p className="text-xs text-muted">{n.message}</p></div>)}</div>}
     </div>
   )
 }
 
-function KpiCard({ title, value, subtitle }: { title: string; value: string; subtitle: string }) { return <Card><p className="text-sm text-muted">{title}</p><p className="mt-1 text-2xl font-semibold">{value}</p><p className="text-xs text-muted">{subtitle}</p></Card> }
-
-function NotificationCenter({ open, onOpenChange, notifications, onRead, onReadAll }: { open: boolean; onOpenChange: (v: boolean) => void; notifications: NotificationItem[]; onRead: (id:number)=>Promise<void>; onReadAll: ()=>Promise<void> }) {
-  return <Modal open={open} onOpenChange={onOpenChange} title="Notification Center"><div className="mb-2 flex justify-end"><Button variant="secondary" onClick={() => onReadAll()}>Прочитать все</Button></div>{notifications.length===0 ? <EmptyState title="Уведомлений нет" subtitle="События появятся здесь."/> : <div className="max-h-[60vh] space-y-2 overflow-auto">{notifications.map((n)=><div key={n.id} className={cn('rounded-xl border p-3', n.is_read ? 'border-border bg-bg':'border-indigo-400/40 bg-indigo-500/10')}><div className="flex items-center justify-between"><Badge tone={n.severity==='warning'?'warn':'info'}>{n.severity}</Badge><span className="text-xs text-muted">{formatDate(n.created_at)}</span></div><p className="mt-1 text-sm font-medium">{n.title}</p><p className="text-xs text-muted">{n.message}</p>{!n.is_read && <Button variant="ghost" className="mt-1" onClick={() => onRead(n.id)}>Отметить прочитанным</Button>}</div>)}</div>}</Modal>
+function SavedViewsBar({ savedViews, onApply }: { savedViews: SavedView[]; onApply: (v: SavedView) => void }) {
+  return <div className="mb-2 flex flex-wrap gap-2">{savedViews.length === 0 ? <span className="text-xs text-muted">Нет сохранённых представлений</span> : savedViews.map((v) => <Button key={v.name} variant="ghost" onClick={() => onApply(v)}>{v.name}</Button>)}</div>
 }
 
-function SessionsView({ sessions, onReload }: { sessions: SessionItem[]; onReload: () => void }) {
-  const [status, setStatus] = useState<'all'|'active'|'closed'>('all')
-  const data = sessions.filter(s => status==='all' ? true : s.status===status)
-  return <Card><div className="mb-3 flex items-center justify-between"><SectionTitle title="Active Sessions" subtitle="Отдельный модуль сессий" /><div className="flex gap-2"><Button variant={status==='all'?'primary':'secondary'} onClick={()=>setStatus('all')}>Все</Button><Button variant={status==='active'?'primary':'secondary'} onClick={()=>setStatus('active')}>Активные</Button><Button variant={status==='closed'?'primary':'secondary'} onClick={()=>setStatus('closed')}>Завершённые</Button><Button variant="secondary" onClick={onReload}>Обновить</Button></div></div>{data.length===0 ? <EmptyState title="Сессий нет" subtitle="Проверьте фильтры"/> : <div className="max-h-[62vh] overflow-auto"><table className="w-full min-w-[760px] text-sm"><thead className="sticky top-0 bg-panel"><tr className="text-left text-muted"><th>Client</th><th>Link</th><th>Source IP</th><th>Started</th><th>Duration</th><th>In/Out</th><th>Status</th></tr></thead><tbody>{data.map((s)=><tr key={s.id} className="border-t border-border"><td>{s.client_name}</td><td>{s.link_name}</td><td className="font-['JetBrains_Mono'] text-xs">{s.source_ip}</td><td>{formatDate(s.started_at)}</td><td>{Math.floor(s.duration_sec/60)} мин</td><td>{s.inbound_gb.toFixed(2)} / {s.outbound_gb.toFixed(2)} GB</td><td><Badge tone={toneByStatus(s.status) as any}>{statusLabel[s.status] ?? s.status}</Badge></td></tr>)}</tbody></table></div>}</Card>
-}
-
-function LinksView({ links, reload, onCreate, setNotice }: { links: Link[]; reload: () => void; onCreate: () => void; setNotice: (v: string | null) => void }) {
+function LinksView({ links, openActionCenter, addSavedView, savedViews }: { links: Link[]; openActionCenter: (a: ActionExecuteIn) => void; addSavedView: (v: SavedView) => void; savedViews: SavedView[] }) {
   const [q, setQ] = useState('')
-  const filtered = links.filter((l) => l.name.toLowerCase().includes(q.toLowerCase()) || l.tag.toLowerCase().includes(q.toLowerCase()))
-  async function action(id: number, type: 'delete' | 'regenerate' | 'toggle') {
-    if (type === 'delete') { if (!confirm('Удалить ссылку?')) return; await apiFetch(`/api/links/${id}`, { method: 'DELETE' }); setNotice('Ссылка удалена') }
-    if (type === 'regenerate') { await apiFetch(`/api/links/${id}/regenerate`, { method: 'POST' }); setNotice('UUID обновлён') }
-    if (type === 'toggle') { const link = links.find((i) => i.id === id); if (!link) return; await apiFetch(`/api/links/${id}`, { method: 'PATCH', body: JSON.stringify({ enabled: !link.enabled }) }); setNotice(link.enabled ? 'Ссылка отключена' : 'Ссылка включена') }
-    await reload()
-  }
-  return <Card><div className="mb-3 flex flex-wrap items-center justify-between gap-2"><SectionTitle title="VLESS ссылки" subtitle="Search + CRUD + actions"/><div className="flex gap-2"><Input value={q} onChange={(e)=>setQ(e.target.value)} placeholder="Поиск"/><Button onClick={onCreate}>Создать</Button></div></div>{filtered.length===0?<EmptyState title="Нет ссылок" subtitle="Создайте новую"/>:<div className="max-h-[62vh] overflow-auto"><table className="w-full min-w-[860px] text-sm"><thead className="sticky top-0 bg-panel"><tr className="text-left text-muted"><th>Имя</th><th>Статус</th><th>IP</th><th>Активность</th><th>Трафик</th><th>Лимит</th><th>Действия</th></tr></thead><tbody>{filtered.map((l)=><tr key={l.id} className="border-t border-border"><td>{l.name}</td><td><Badge tone={toneByStatus(l.status) as any}>{statusLabel[l.status] ?? l.status}</Badge></td><td className="font-['JetBrains_Mono'] text-xs">{l.last_ip ?? '—'}</td><td>{formatDate(l.last_activity_at)}</td><td>{formatTraffic(l.total_traffic_gb)}</td><td>{l.traffic_limit_gb ?? '—'}</td><td className="space-x-1"><Button variant="secondary" onClick={()=>navigator.clipboard.writeText(l.vless_url)}>Copy</Button><Button variant="secondary" onClick={()=>action(l.id,'regenerate')}>UUID</Button><Button variant="secondary" onClick={()=>action(l.id,'toggle')}>{l.enabled?'Off':'On'}</Button><Button variant="danger" onClick={()=>action(l.id,'delete')}>Del</Button></td></tr>)}</tbody></table></div>}</Card>
+  const [status, setStatus] = useState('all')
+  const filtered = links.filter((l) => (status === 'all' || l.status === status) && (l.name.toLowerCase().includes(q.toLowerCase()) || l.tag.toLowerCase().includes(q.toLowerCase())))
+  return (
+    <Card>
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2"><SectionTitle title="VLESS ссылки" subtitle="Action Center + Saved Views"/><div className="flex gap-2"><Input value={q} onChange={(e)=>setQ(e.target.value)} placeholder="Поиск"/><Button onClick={() => addSavedView({ name: `View ${Date.now()}`, query: q, status })}>Сохранить view</Button></div></div>
+      <SavedViewsBar savedViews={savedViews} onApply={(v) => { setQ(v.query); setStatus(v.status) }} />
+      <div className="mb-2 flex gap-2"><Button variant={status==='all'?'primary':'secondary'} onClick={() => setStatus('all')}>Все</Button><Button variant={status==='active'?'primary':'secondary'} onClick={() => setStatus('active')}>Активные</Button><Button variant={status==='disabled'?'primary':'secondary'} onClick={() => setStatus('disabled')}>Отключённые</Button></div>
+      {filtered.length===0?<EmptyState title="Нет ссылок" subtitle="Измените фильтры или создайте новую"/>:<div className="max-h-[62vh] overflow-auto"><table className="w-full min-w-[860px] text-sm"><thead className="sticky top-0 bg-panel"><tr className="text-left text-muted"><th>Имя</th><th>Статус</th><th>IP</th><th>Активность</th><th>Трафик</th><th>Лимит</th><th>Действия</th></tr></thead><tbody>{filtered.map((l)=><tr key={l.id} className="border-t border-border"><td>{l.name}</td><td><Badge tone={toneByStatus(l.status) as any}>{statusLabel[l.status] ?? l.status}</Badge></td><td className="font-['JetBrains_Mono'] text-xs">{l.last_ip ?? '—'}</td><td>{formatDate(l.last_activity_at)}</td><td>{formatTraffic(l.total_traffic_gb)}</td><td>{l.traffic_limit_gb ?? '—'}</td><td className="space-x-1"><Button variant="secondary" onClick={()=>navigator.clipboard.writeText(l.vless_url)}>Copy</Button><Button variant="secondary" onClick={()=>openActionCenter({ action: 'regenerate_uuid', target_type: 'link', target_id: l.id })}>UUID</Button><Button variant="secondary" onClick={()=>openActionCenter({ action: 'set_link_enabled', target_type: 'link', target_id: l.id, enabled: !l.enabled })}>{l.enabled?'Off':'On'}</Button></td></tr>)}</tbody></table></div>}
+    </Card>
+  )
 }
 
-function ClientsView({ clients }: { clients: Client[] }) {
+function ClientsView({ clients, openActionCenter, addSavedView, savedViews }: { clients: Client[]; openActionCenter: (a: ActionExecuteIn) => void; addSavedView: (v: SavedView) => void; savedViews: SavedView[] }) {
   const [selectedId, setSelectedId] = useState<number | null>(clients[0]?.id ?? null)
-  const selected = clients.find((c) => c.id === selectedId) ?? null
-  return <div className="grid gap-3 lg:grid-cols-3"><Card className="lg:col-span-1"><SectionTitle title="Clients" subtitle="Список"/>{clients.map((c)=><button key={c.id} onClick={()=>setSelectedId(c.id)} className={cn('mb-2 w-full rounded-xl border p-3 text-left', selectedId===c.id?'border-indigo-400 bg-indigo-500/10':'border-border bg-bg')}><div className="flex justify-between"><span>{c.client_name}</span><Badge tone={c.status==='active'?'success':'default'}>{statusLabel[c.status] ?? c.status}</Badge></div></button>)}</Card><Card className="lg:col-span-2">{!selected?<LoadingState text="Выберите клиента"/>:<><SectionTitle title="Детали клиента"/><p>{selected.client_name}</p><p className="font-['JetBrains_Mono'] text-sm">{selected.current_ip}</p><p className="text-sm">24ч: {formatTraffic(selected.traffic_24h_gb)} • 7д: {formatTraffic(selected.traffic_7d_gb)}</p></>}</Card></div>
+  const [q, setQ] = useState('')
+  const filtered = clients.filter((c) => c.client_name.toLowerCase().includes(q.toLowerCase()) || c.current_ip.includes(q))
+  const selected = filtered.find((c) => c.id === selectedId) ?? null
+  return <div className="grid gap-3 lg:grid-cols-3"><Card className="lg:col-span-1"><div className="mb-2 flex items-center justify-between"><SectionTitle title="Clients" subtitle="Список"/><Button variant="secondary" onClick={() => addSavedView({ name: `View ${Date.now()}`, query: q, status: 'all' })}>Save view</Button></div><SavedViewsBar savedViews={savedViews} onApply={(v)=>setQ(v.query)} /><Input value={q} onChange={(e)=>setQ(e.target.value)} placeholder="Поиск"/>{filtered.map((c)=><button key={c.id} onClick={()=>setSelectedId(c.id)} className={cn('mt-2 w-full rounded-xl border p-3 text-left', selectedId===c.id?'border-indigo-400 bg-indigo-500/10':'border-border bg-bg')}><div className="flex justify-between"><span>{c.client_name}</span><Badge tone={c.status==='active'?'success':'default'}>{statusLabel[c.status] ?? c.status}</Badge></div></button>)}</Card><Card className="lg:col-span-2">{!selected?<LoadingState text="Выберите клиента"/>:<><SectionTitle title="Детали клиента" subtitle="Быстрые действия"/><p>{selected.client_name}</p><p className="font-['JetBrains_Mono'] text-sm">{selected.current_ip}</p><p className="text-sm">24ч: {formatTraffic(selected.traffic_24h_gb)} • 7д: {formatTraffic(selected.traffic_7d_gb)}</p><div className="mt-3"><Button variant="danger" onClick={() => openActionCenter({ action: 'mark_suspicious', target_type: 'client', target_id: selected.id })}>Mark suspicious</Button></div></>}</Card></div>
+}
+
+function SessionsView({ sessions, onOpenSession, addSavedView, savedViews }: { sessions: SessionItem[]; onOpenSession: (id: number) => void; addSavedView: (v: SavedView) => void; savedViews: SavedView[] }) {
+  const [status, setStatus] = useState('all')
+  const [q, setQ] = useState('')
+  const filtered = sessions.filter((s) => (status === 'all' || s.status === status) && (s.client_name.toLowerCase().includes(q.toLowerCase()) || s.source_ip.includes(q)))
+  return <Card><div className="mb-3 flex flex-wrap items-center justify-between gap-2"><SectionTitle title="Сессии" subtitle="Session Drilldown + Timeline"/><div className="flex gap-2"><Input value={q} onChange={(e)=>setQ(e.target.value)} placeholder="Поиск"/><Button variant="secondary" onClick={() => addSavedView({ name: `View ${Date.now()}`, query: q, status })}>Save view</Button></div></div><SavedViewsBar savedViews={savedViews} onApply={(v) => { setQ(v.query); setStatus(v.status) }} /><div className="mb-2 flex gap-2"><Button variant={status==='all'?'primary':'secondary'} onClick={() => setStatus('all')}>Все</Button><Button variant={status==='active'?'primary':'secondary'} onClick={() => setStatus('active')}>Активные</Button><Button variant={status==='closed'?'primary':'secondary'} onClick={() => setStatus('closed')}>Завершённые</Button></div>{filtered.length===0 ? <EmptyState title="Нет сессий" subtitle="Измените фильтр"/> : <div className="max-h-[60vh] overflow-auto"><table className="w-full min-w-[860px] text-sm"><thead className="sticky top-0 bg-panel"><tr className="text-left text-muted"><th>IP</th><th>Клиент</th><th>Ссылка</th><th>Статус</th><th>Start</th><th>Duration</th><th>IN/OUT</th></tr></thead><tbody>{filtered.map((s)=><tr key={s.id} onClick={() => onOpenSession(s.id)} className="cursor-pointer border-t border-border hover:bg-indigo-500/10"><td className="font-['JetBrains_Mono'] text-xs">{s.source_ip}</td><td>{s.client_name}</td><td>{s.link_name}</td><td><Badge tone={toneByStatus(s.status) as any}>{statusLabel[s.status] ?? s.status}</Badge></td><td>{formatDate(s.started_at)}</td><td>{Math.floor(s.duration_sec/60)} мин</td><td>{s.inbound_gb.toFixed(2)} / {s.outbound_gb.toFixed(2)} GB</td></tr>)}</tbody></table></div>}</Card>
 }
 
 function SettingsView({ server, logs }: { server: ServerStatus | null; logs: LogItem[] }) {
   const [serverLogs, setServerLogs] = useState<string[]>([])
   useEffect(() => { apiFetch<{ lines: string[] }>('/api/server/logs').then((x) => setServerLogs(x.lines)).catch(() => setServerLogs([])) }, [])
   return <div className="grid gap-3 lg:grid-cols-2"><Card><SectionTitle title="Состояние сервера" subtitle="Основные параметры"/><p>Статус: <Badge tone={toneByStatus(server?.service_status) as any}>{statusLabel[server?.service_status ?? ''] ?? server?.service_status ?? 'unknown'}</Badge></p><p>Версия: {server?.xray_version ?? '—'}</p><p>Uptime: {server?.uptime_hours ?? 0} часов</p><p>Адрес: {server?.domain ?? '—'}:{server?.port ?? '—'}</p></Card><Card><SectionTitle title="Логи и активность"/><div className="rounded-xl border border-border bg-bg p-3 font-['JetBrains_Mono'] text-xs">{serverLogs.length===0 ? 'Логи недоступны' : serverLogs.map((l,i)=><p key={i}>{l}</p>)}</div><div className="mt-3 max-h-44 overflow-auto rounded-xl border border-border bg-bg p-3 text-sm">{logs.map((l)=><p key={l.id}><span className="text-muted">{formatDate(l.created_at)}</span> — {l.action}</p>)}</div></Card></div>
+}
+
+function NotificationCenter({ open, onOpenChange, notifications, onRead, onReadAll }: { open: boolean; onOpenChange: (v: boolean) => void; notifications: NotificationItem[]; onRead: (id:number)=>Promise<void>; onReadAll: ()=>Promise<void> }) {
+  return <Modal open={open} onOpenChange={onOpenChange} title="Notification Center"><div className="mb-2 flex justify-end"><Button variant="secondary" onClick={() => onReadAll()}>Прочитать все</Button></div>{notifications.length===0 ? <EmptyState title="Уведомлений нет" subtitle="События появятся здесь."/> : <div className="max-h-[60vh] space-y-2 overflow-auto">{notifications.map((n)=><div key={n.id} className={cn('rounded-xl border p-3', n.is_read ? 'border-border bg-bg':'border-indigo-400/40 bg-indigo-500/10')}><div className="flex items-center justify-between"><Badge tone={n.severity==='warning'?'warn':'info'}>{n.severity}</Badge><span className="text-xs text-muted">{formatDate(n.created_at)}</span></div><p className="mt-1 text-sm font-medium">{n.title}</p><p className="text-xs text-muted">{n.message}</p>{!n.is_read && <Button variant="ghost" className="mt-1" onClick={() => onRead(n.id)}>Отметить прочитанным</Button>}</div>)}</div>}</Modal>
+}
+
+function ActionCenterModal({ open, onOpenChange, payload, reason, setReason, onConfirm, running }: { open: boolean; onOpenChange: (v: boolean) => void; payload: ActionExecuteIn | null; reason: string; setReason: (v: string) => void; onConfirm: () => Promise<void>; running: boolean }) {
+  const consequences: Record<string, string> = {
+    restart: 'Перезапуск кратковременно прервёт активные подключения.',
+    reload: 'Перезагрузка конфигурации применит изменения без полного рестарта.',
+    regenerate_uuid: 'Старый UUID ссылки перестанет работать.',
+    set_link_enabled: 'Смена статуса ссылки влияет на доступ клиента.',
+    mark_suspicious: 'Клиент будет отмечен для диагностики и аудита.'
+  }
+  return <Modal open={open} onOpenChange={onOpenChange} title="Action Center"><div className="space-y-3">{!payload ? <LoadingState text="Нет действия"/> : <><p className="text-sm">Действие: <b>{payload.action}</b></p><p className="text-sm text-muted">{consequences[payload.action]}</p><Input value={reason} onChange={(e)=>setReason(e.target.value)} placeholder="Причина / комментарий (опционально)"/><div className="flex justify-end gap-2"><Button variant="secondary" onClick={() => onOpenChange(false)}>Отмена</Button><Button onClick={() => { void onConfirm() }} disabled={running}>{running ? 'Выполняется...' : 'Подтвердить'}</Button></div></>}</div></Modal>
+}
+
+function SessionDrilldownDrawer({ open, onOpenChange, loading, data, timeline, onGoClient, onGoLink }: { open: boolean; onOpenChange: (v: boolean) => void; loading: boolean; data: SessionDrilldown | null; timeline: TimelineEvent[]; onGoClient: () => void; onGoLink: () => void }) {
+  return <Modal open={open} onOpenChange={onOpenChange} title="Session Drilldown">{loading ? <LoadingState text="Загрузка деталей сессии..."/> : !data ? <ErrorState message="Не удалось загрузить детали"/> : <div className="space-y-3"><div className="grid gap-2 md:grid-cols-2"><Card><p className="text-xs text-muted">Source IP</p><p className="font-['JetBrains_Mono'] text-sm">{data.source_ip}</p></Card><Card><p className="text-xs text-muted">Status</p><Badge tone={toneByStatus(data.status) as any}>{statusLabel[data.status] ?? data.status}</Badge></Card><Card><p className="text-xs text-muted">Started at</p><p>{formatDate(data.started_at)}</p></Card><Card><p className="text-xs text-muted">Duration</p><p>{Math.floor(data.duration_sec / 60)} мин</p></Card><Card><p className="text-xs text-muted">Traffic</p><p>IN {data.inbound_gb.toFixed(2)} / OUT {data.outbound_gb.toFixed(2)} GB</p></Card><Card><p className="text-xs text-muted">Reconnect/history</p><p>{data.reconnect_summary}</p></Card></div><div className="flex gap-2"><Button variant="secondary" onClick={onGoClient}>К клиенту</Button><Button variant="secondary" onClick={onGoLink}>К ссылке</Button></div><Card><SectionTitle title="Timeline / Correlation" subtitle="События по сессии"/>{timeline.length === 0 ? <EmptyState title="Событий пока нет" subtitle="Появятся после активности"/> : <div className="space-y-2">{timeline.map((t, idx) => <div key={`${t.at}-${idx}`} className="rounded-xl border border-border bg-bg p-3"><div className="flex justify-between"><Badge tone={t.kind === 'system' ? 'warn' : 'info'}>{t.kind}</Badge><span className="text-xs text-muted">{formatDate(t.at)}</span></div><p className="mt-1 text-sm font-medium">{t.title}</p><p className="text-xs text-muted">{t.message}</p></div>)}</div>}</Card><Card><SectionTitle title="Связанные события"/>{data.related_events.length === 0 ? <EmptyState title="Нет связанных событий" subtitle="События появятся позже"/> : data.related_events.map((e, idx) => <p key={idx} className="text-sm"><span className="text-muted">{formatDate(e.created_at)}</span> — {e.title}: {e.message}</p>)}</Card></div>}</Modal>
 }
 
 function CreateLinkModal({ open, onOpenChange, onDone }: { open: boolean; onOpenChange: (v: boolean) => void; onDone: () => void }) {

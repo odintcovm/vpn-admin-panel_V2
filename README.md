@@ -1,25 +1,27 @@
 # VPN Admin Panel V2
 
-Лёгкая, аккуратная админ-панель для управления **одним Xray/VLESS сервером** на одном VPS.
+Лёгкая, премиальная админ-панель для управления **одним Xray/VLESS сервером** на одном VPS.
 
-## Что реализовано в Foundation + Stabilization
-- RBAC scaffolding (roles/permissions + backend guards)
-- Hardening для `x-role` dev-эмуляции (явный флаг + запрет вне dev/test)
-- Migration-first база на Alembic (штатный запуск без неявных schema mutations)
-- Persistent Notification Center с per-principal read-state
-- Sessions API + отдельная страница Sessions
-- Auth foundation (`users`, `auth_sessions`) без поломки token-only режима
-- CI baseline (GitHub Actions)
+## Что реализовано сейчас
 
-## Архитектура (кратко)
-- **Frontend**: React + TypeScript + Vite + Tailwind + shadcn/ui-style components + Recharts
+- Migration-first backend baseline (Alembic-first).
+- RBAC + token-only security context (`x-api-token`) с безопасной dev-role emulation.
+- Notification Center с per-principal read-state.
+- Sessions list + Session Drilldown + Timeline (v1).
+- Global Health/Freshness Bar.
+- Action Center для критичных действий с confirm-паттерном.
+- Saved Views (local) для Links / Clients / Sessions.
+
+## Архитектура
+
+- **Frontend**: React + TypeScript + Vite + Tailwind + Recharts
 - **Backend**: FastAPI + SQLAlchemy + Pydantic + SQLite
 - **Realtime**: SSE (`/api/events/stream`, mock-driven)
 - **Providers**:
   - `MockProvider` (default)
   - `XrayProvider` (integration scaffold)
 
-## Быстрый старт (локально)
+## Быстрый старт
 
 ### 1) Подготовить env
 ```bash
@@ -36,7 +38,6 @@ pip install -r requirements.txt
 PYTHONPATH=. alembic upgrade head
 uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 ```
-API: http://localhost:8000
 
 ### 3) Frontend: install → run
 ```bash
@@ -44,11 +45,10 @@ cd apps/web
 npm install
 npm run dev
 ```
-Web: http://localhost:5173
 
 ## Migration-first режим
 
-Основной режим управления схемой: **только Alembic**.
+Штатный режим: только Alembic.
 
 ```bash
 cd apps/api
@@ -56,81 +56,68 @@ PYTHONPATH=. alembic upgrade head
 PYTHONPATH=. alembic downgrade -1
 ```
 
-### SCHEMA_MANAGEMENT_MODE
-- `alembic` (по умолчанию): безопасный штатный режим. Приложение **не** выполняет `create_all()`.
-- `bootstrap`: dev-only fallback для одноразового локального старта. Разрешён только в dev-like окружении.
+`SCHEMA_MANAGEMENT_MODE`:
+- `alembic` (default): schema mutations на startup не выполняются.
+- `bootstrap`: dev-only fallback для локального bootstrap.
 
-> Для staging/production использовать только migration-first workflow.
+> В staging/production использовать только migration-first workflow.
 
-## RBAC и token совместимость
+## Security / RBAC
 
-### Совместимость с `x-api-token`
-- Текущий `x-api-token` сценарий сохранён.
-- По умолчанию токен маппится на privileged context (`owner`).
+- `x-api-token` сохранён и совместим.
+- `x-role` работает только при `APP_ENV in {development, dev, local, test}` + `DEV_ROLE_EMULATION=true`.
+- `/api/auth/me` возвращает `subject_id`, `role`, `permissions`, `auth_mode`, `user_id`, `dev_role_emulation_enabled`.
 
-### `x-role` (только для dev/test)
-Role emulation включается только при:
-- `APP_ENV in {development, dev, local, test}`
-- `DEV_ROLE_EMULATION=true`
+## UX-модули этого спринта
 
-Иначе `x-role` возвращает:
-- `403`
-- `error.code = DEV_ROLE_EMULATION_DISABLED`
+### Action Center
+Критичные действия через единый confirm-паттерн:
+- restart
+- reload
+- regenerate UUID
+- enable/disable link
+- mark suspicious
 
-Проверка контекста:
-- `GET /api/auth/me`
-- возвращает `subject_id`, `role`, `permissions`, `auth_mode`, `user_id`, `dev_role_emulation_enabled`
+API: `POST /api/actions/execute`.
 
-## Auth foundation (текущий статус)
+### Session Drilldown
+- Открытие детализации сессии из таблицы.
+- Показ ключевых полей + reconnect summary + related events.
+- Timeline v1 в боковой карточке.
 
-Подготовлены базовые сущности для следующего auth-спринта:
-- `users`
-- `auth_sessions`
+API:
+- `GET /api/sessions/{id}/drilldown`
+- `GET /api/timeline/sessions/{id}`
 
-Текущий режим остаётся token-only. Полный lifecycle (`login/refresh/logout/session UI`) пока не реализован.
+### Health / Freshness Bar
+Глобальная панель состояния:
+- provider/backend status
+- SSE status (client-side)
+- last refresh
+- freshness/degraded indications
+
+API: `GET /api/system/health`.
+
+### Saved Views (local)
+- Links / Clients / Sessions.
+- Сохраняются в localStorage (без backend persistence на текущем этапе).
 
 ## Notifications
 
-- Статус прочтения хранится в `notification_reads` (per-principal).
-- Legacy `notifications.is_read` оставлен как временный compatibility слой, но **не используется как источник истины**.
-- Endpoints:
-  - `GET /api/notifications`
-  - `POST /api/notifications/{id}/read`
-  - `POST /api/notifications/read-all`
+- Источник истины read-state: `notification_reads`.
+- Legacy `notifications.is_read` оставлен как compatibility слой и не участвует в business truth.
 
-## API surface (актуально)
-- `GET /api/auth/me`
-- `GET /api/dashboard/overview`
-- `GET /api/links`
-- `POST /api/links`
-- `PATCH /api/links/{id}`
-- `DELETE /api/links/{id}`
-- `POST /api/links/{id}/regenerate`
-- `GET /api/links/{id}/qr`
-- `GET /api/clients`
-- `GET /api/clients/active`
-- `GET /api/clients/{id}`
-- `GET /api/sessions`
-- `GET /api/sessions/active`
-- `GET /api/sessions/{id}`
-- `GET /api/server/status`
-- `GET /api/server/logs`
-- `POST /api/server/restart`
-- `POST /api/server/reload`
-- `GET /api/events`
-- `GET /api/activity-log`
-- `GET /api/notifications`
-- `POST /api/notifications/{id}/read`
-- `POST /api/notifications/read-all`
-- `GET /api/events/stream`
+## API surface (добавлено/обновлено)
 
-## CI
-GitHub Actions `.github/workflows/ci.yml`:
-- frontend install + build/typecheck
-- backend install
-- backend tests (`pytest`)
+- `GET /api/system/health`
+- `POST /api/actions/execute`
+- `GET /api/sessions/{id}/drilldown`
+- `GET /api/timeline/sessions/{id}`
 
-## Обязательные команды после pull
+Также сохранены существующие `/api/auth/me`, `/api/links*`, `/api/clients*`, `/api/sessions*`, `/api/notifications*`, `/api/server/*` и т.д.
+
+## Обязательные проверки после pull
+
 ```bash
 # backend
 cd apps/api
@@ -144,8 +131,17 @@ npm install
 npm run build
 ```
 
-## Что вне scope текущего этапа
-- Полный auth lifecycle (`/auth/login`, refresh, logout, session store + UI)
+## Ручная проверка новых UX-сценариев
+
+1. Открыть панель и проверить Health/Freshness Bar (backend/provider/SSE/freshness).
+2. В Links/Clients/Settings запустить критичные действия через Action Center.
+3. На странице Sessions открыть drilldown по строке, проверить timeline.
+4. Создать и применить Saved View на Links/Clients/Sessions.
+5. Проверить Notification Center (read / read-all).
+
+## Что вне scope
+
+- Полный auth lifecycle (`/auth/login`, refresh, logout, session UI)
 - Real Xray integration
 - Замена mock SSE на real event source
 - Advanced alerts engine
