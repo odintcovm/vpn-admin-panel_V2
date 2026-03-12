@@ -89,6 +89,28 @@ class TimelineEventOut(BaseModel):
     message: str
 
 
+class ClientProfileFormatOut(BaseModel):
+    key: str
+    title: str
+    available: bool
+    description: str
+
+
+class ClientProfilesOut(BaseModel):
+    link_id: int
+    link_name: str
+    formats: list[ClientProfileFormatOut]
+
+
+class ClientProfilePayloadOut(BaseModel):
+    key: str
+    title: str
+    content_type: str
+    filename: str | None = None
+    payload: str
+    instruction: str
+
+
 class NotificationOut(BaseModel):
     id: int
     severity: str

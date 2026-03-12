@@ -1,33 +1,76 @@
+name: vpn_admin_panel
+
 services:
+  xray:
+    image: teddysun/xray:latest
+    container_name: vpn_xray
+    restart: unless-stopped
+    volumes:
+      - ./docker/xray/config.json:/etc/xray/config.json:ro
+      - xray_logs:/var/log/xray
+    ports:
+      - "${XRAY_PUBLIC_PORT:-8443}:8443"
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep xray >/dev/null || exit 1"]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+
   api:
     build: ./apps/api
+    container_name: vpn_api
     env_file:
       - .env
     environment:
-      - APP_PROVIDER=${APP_PROVIDER:-mock}
-      - DATABASE_URL=${DATABASE_URL:-sqlite:///./data.db}
+      - APP_PROVIDER=${APP_PROVIDER:-xray}
+      - DATABASE_URL=${DATABASE_URL:-sqlite:///./data/data.db}
       - API_TOKEN=${API_TOKEN:-admin-token}
-    ports:
-      - "8000:8000"
+      - APP_ENV=${APP_ENV:-prod-like}
+      - DEV_ROLE_EMULATION=${DEV_ROLE_EMULATION:-false}
+      - SCHEMA_MANAGEMENT_MODE=${SCHEMA_MANAGEMENT_MODE:-alembic}
     volumes:
-      - ./apps/api:/app
+      - api_data:/app/data
+    depends_on:
+      xray:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"]
+      interval: 20s
+      timeout: 5s
+      retries: 5
     restart: unless-stopped
 
   web:
-    build: ./apps/web
-    env_file:
-      - .env
-    environment:
-      - VITE_API_URL=${VITE_API_URL:-http://localhost:8000}
-      - VITE_API_TOKEN=${VITE_API_TOKEN:-admin-token}
-    ports:
-      - "5173:5173"
-    volumes:
-      - ./apps/web:/app
-      - web_node_modules:/app/node_modules
+    build:
+      context: ./apps/web
+      args:
+        VITE_API_URL: ${VITE_API_URL:-}
+        VITE_API_TOKEN: ${VITE_API_TOKEN:-admin-token}
+    container_name: vpn_web
     depends_on:
-      - api
+      api:
+        condition: service_healthy
     restart: unless-stopped
 
+  proxy:
+    image: caddy:2.8
+    container_name: vpn_proxy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./docker/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      web:
+        condition: service_started
+      api:
+        condition: service_healthy
+
 volumes:
-  web_node_modules:
+  api_data:
+  xray_logs:
+  caddy_data:
+  caddy_config:

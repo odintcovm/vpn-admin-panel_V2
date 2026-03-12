@@ -6,6 +6,8 @@ import type {
   ActionExecuteIn,
   ActionExecuteOut,
   Client,
+  ClientProfilePayload,
+  ClientProfiles,
   HealthFreshness,
   Link,
   NotificationItem,
@@ -113,7 +115,7 @@ export function App() {
 
   useEffect(() => {
     load()
-    const base = import.meta.env.VITE_API_URL ?? 'http://localhost:8000'
+    const base = import.meta.env.VITE_API_URL ?? ''
     const src = new EventSource(`${base}/api/events/stream?token=${apiToken}`)
     src.onopen = () => setSseState('connected')
     src.onmessage = (event) => {
@@ -278,14 +280,20 @@ function SavedViewsBar({ savedViews, onApply }: { savedViews: SavedView[]; onApp
 function LinksView({ links, openActionCenter, addSavedView, savedViews }: { links: Link[]; openActionCenter: (a: ActionExecuteIn) => void; addSavedView: (v: SavedView) => void; savedViews: SavedView[] }) {
   const [q, setQ] = useState('')
   const [status, setStatus] = useState('all')
+  const [profilesOpen, setProfilesOpen] = useState(false)
+  const [selectedLink, setSelectedLink] = useState<Link | null>(null)
   const filtered = links.filter((l) => (status === 'all' || l.status === status) && (l.name.toLowerCase().includes(q.toLowerCase()) || l.tag.toLowerCase().includes(q.toLowerCase())))
+
   return (
-    <Card>
-      <div className="mb-3 flex flex-wrap items-center justify-between gap-2"><SectionTitle title="VLESS ссылки" subtitle="Центр действий + Saved Views"/><div className="flex gap-2"><Input value={q} onChange={(e)=>setQ(e.target.value)} placeholder="Поиск"/><Button onClick={() => addSavedView({ name: `Представление ${Date.now()}`, query: q, status })}>Сохранить view</Button></div></div>
-      <SavedViewsBar savedViews={savedViews} onApply={(v) => { setQ(v.query); setStatus(v.status) }} />
-      <div className="mb-2 flex gap-2"><Button variant={status==='all'?'primary':'secondary'} onClick={() => setStatus('all')}>Все</Button><Button variant={status==='active'?'primary':'secondary'} onClick={() => setStatus('active')}>Активные</Button><Button variant={status==='disabled'?'primary':'secondary'} onClick={() => setStatus('disabled')}>Отключённые</Button></div>
-      {filtered.length===0?<EmptyState title="Нет ссылок" subtitle="Измените фильтры или создайте новую"/>:<div className="max-h-[62vh] overflow-auto"><table className="w-full min-w-[860px] text-sm"><thead className="sticky top-0 bg-panel"><tr className="text-left text-muted"><th>Имя</th><th>Статус</th><th>IP</th><th>Активность</th><th>Трафик</th><th>Лимит</th><th>Действия</th></tr></thead><tbody>{filtered.map((l)=><tr key={l.id} className="border-t border-border"><td>{l.name}</td><td><Badge tone={toneByStatus(l.status) as any}>{statusLabel[l.status] ?? l.status}</Badge></td><td className="font-['JetBrains_Mono'] text-xs">{l.last_ip ?? '—'}</td><td>{formatDate(l.last_activity_at)}</td><td>{formatTraffic(l.total_traffic_gb)}</td><td>{l.traffic_limit_gb ?? '—'}</td><td className="space-x-1"><Button variant="secondary" onClick={()=>navigator.clipboard.writeText(l.vless_url)}>Copy</Button><Button variant="secondary" onClick={()=>openActionCenter({ action: 'regenerate_uuid', target_type: 'link', target_id: l.id })}>UUID</Button><Button variant="secondary" onClick={()=>openActionCenter({ action: 'set_link_enabled', target_type: 'link', target_id: l.id, enabled: !l.enabled })}>{l.enabled?'Off':'On'}</Button></td></tr>)}</tbody></table></div>}
-    </Card>
+    <>
+      <Card>
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-2"><SectionTitle title="VLESS ссылки" subtitle="Центр действий + Saved Views"/><div className="flex gap-2"><Input value={q} onChange={(e)=>setQ(e.target.value)} placeholder="Поиск"/><Button onClick={() => addSavedView({ name: `Представление ${Date.now()}`, query: q, status })}>Сохранить view</Button></div></div>
+        <SavedViewsBar savedViews={savedViews} onApply={(v) => { setQ(v.query); setStatus(v.status) }} />
+        <div className="mb-2 flex gap-2"><Button variant={status==='all'?'primary':'secondary'} onClick={() => setStatus('all')}>Все</Button><Button variant={status==='active'?'primary':'secondary'} onClick={() => setStatus('active')}>Активные</Button><Button variant={status==='disabled'?'primary':'secondary'} onClick={() => setStatus('disabled')}>Отключённые</Button></div>
+        {filtered.length===0?<EmptyState title="Нет ссылок" subtitle="Измените фильтры или создайте новую"/>:<div className="max-h-[62vh] overflow-auto"><table className="w-full min-w-[980px] text-sm"><thead className="sticky top-0 bg-panel"><tr className="text-left text-muted"><th>Имя</th><th>Статус</th><th>IP</th><th>Активность</th><th>Трафик</th><th>Лимит</th><th>Действия</th></tr></thead><tbody>{filtered.map((l)=><tr key={l.id} className="border-t border-border"><td>{l.name}</td><td><Badge tone={toneByStatus(l.status) as any}>{statusLabel[l.status] ?? l.status}</Badge></td><td className="font-['JetBrains_Mono'] text-xs">{l.last_ip ?? '—'}</td><td>{formatDate(l.last_activity_at)}</td><td>{formatTraffic(l.total_traffic_gb)}</td><td>{l.traffic_limit_gb ?? '—'}</td><td className="space-x-1"><Button variant="secondary" onClick={()=>navigator.clipboard.writeText(l.vless_url)}>Copy</Button><Button variant="secondary" onClick={()=>{setSelectedLink(l); setProfilesOpen(true)}}>Profiles</Button><Button variant="secondary" onClick={()=>openActionCenter({ action: 'regenerate_uuid', target_type: 'link', target_id: l.id })}>UUID</Button><Button variant="secondary" onClick={()=>openActionCenter({ action: 'set_link_enabled', target_type: 'link', target_id: l.id, enabled: !l.enabled })}>{l.enabled?'Off':'On'}</Button></td></tr>)}</tbody></table></div>}
+      </Card>
+      <ClientProfilesModal open={profilesOpen} onOpenChange={setProfilesOpen} link={selectedLink} />
+    </>
   )
 }
 
@@ -327,6 +335,49 @@ function ActionCenterModal({ open, onOpenChange, payload, reason, setReason, onC
 
 function SessionDrilldownDrawer({ open, onOpenChange, loading, data, timeline, onGoClient, onGoLink }: { open: boolean; onOpenChange: (v: boolean) => void; loading: boolean; data: SessionDrilldown | null; timeline: TimelineEvent[]; onGoClient: () => void; onGoLink: () => void }) {
   return <Modal open={open} onOpenChange={onOpenChange} title="Drilldown сессии">{loading ? <LoadingState text="Загрузка деталей сессии..."/> : !data ? <ErrorState message="Не удалось загрузить детали"/> : <div className="space-y-3"><div className="grid gap-2 md:grid-cols-2"><Card><p className="text-xs text-muted">IP источника</p><p className="font-['JetBrains_Mono'] text-sm">{data.source_ip}</p></Card><Card><p className="text-xs text-muted">Статус</p><Badge tone={toneByStatus(data.status) as any}>{statusLabel[data.status] ?? data.status}</Badge></Card><Card><p className="text-xs text-muted">Время старта</p><p>{formatDate(data.started_at)}</p></Card><Card><p className="text-xs text-muted">Длительность</p><p>{Math.floor(data.duration_sec / 60)} мин</p></Card><Card><p className="text-xs text-muted">Трафик</p><p>IN {data.inbound_gb.toFixed(2)} / OUT {data.outbound_gb.toFixed(2)} GB</p></Card><Card><p className="text-xs text-muted">Reconnect/история</p><p>{data.reconnect_summary}</p></Card></div><div className="flex gap-2"><Button variant="secondary" onClick={onGoClient}>К клиенту</Button><Button variant="secondary" onClick={onGoLink}>К ссылке</Button></div><Card><SectionTitle title="Timeline / Корреляция" subtitle="События по сессии"/>{timeline.length === 0 ? <EmptyState title="Событий пока нет" subtitle="Появятся после активности"/> : <div className="space-y-2">{timeline.map((t, idx) => <div key={`${t.at}-${idx}`} className="rounded-xl border border-border bg-bg p-3"><div className="flex justify-between"><Badge tone={t.kind === 'system' ? 'warn' : 'info'}>{t.kind}</Badge><span className="text-xs text-muted">{formatDate(t.at)}</span></div><p className="mt-1 text-sm font-medium">{t.title}</p><p className="text-xs text-muted">{t.message}</p></div>)}</div>}</Card><Card><SectionTitle title="Связанные события"/>{data.related_events.length === 0 ? <EmptyState title="Нет связанных событий" subtitle="События появятся позже"/> : data.related_events.map((e, idx) => <p key={idx} className="text-sm"><span className="text-muted">{formatDate(e.created_at)}</span> — {e.title}: {e.message}</p>)}</Card></div>}</Modal>
+}
+
+
+function ClientProfilesModal({ open, onOpenChange, link }: { open: boolean; onOpenChange: (v: boolean) => void; link: Link | null }) {
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [formats, setFormats] = useState<ClientProfiles | null>(null)
+  const [payload, setPayload] = useState<ClientProfilePayload | null>(null)
+  const [noticeText, setNoticeText] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!open || !link) return
+    setLoading(true)
+    setError(null)
+    setPayload(null)
+    apiFetch<ClientProfiles>(`/api/links/${link.id}/profiles`)
+      .then(setFormats)
+      .catch((e) => setError((e as Error).message))
+      .finally(() => setLoading(false))
+  }, [open, link])
+
+  async function fetchPayload(key: string) {
+    if (!link) return
+    setLoading(true)
+    try {
+      const data = await apiFetch<ClientProfilePayload>(`/api/links/${link.id}/profiles/${key}`)
+      setPayload(data)
+      setNoticeText('Профиль загружен')
+    } catch (e) {
+      setError((e as Error).message)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return <Modal open={open} onOpenChange={onOpenChange} title={`Client Profiles${link ? `: ${link.name}` : ''}`}><div className="space-y-3">{loading && <LoadingState text="Загрузка профилей..." />}{error && <ErrorState message={error} />} {!loading && !error && formats && <div className="space-y-2">{formats.formats.map((fmt)=><Card key={fmt.key}><div className="flex items-center justify-between gap-2"><div><p className="text-sm font-medium">{fmt.title}</p><p className="text-xs text-muted">{fmt.description}</p></div><div className="flex gap-2"><Badge tone={fmt.available ? 'success' : 'default'}>{fmt.available ? 'Доступно' : 'Недоступно'}</Badge><Button variant="secondary" disabled={!fmt.available} onClick={() => { void fetchPayload(fmt.key) }}>Открыть</Button></div></div></Card>)}</div>} {noticeText && <InlineNotice tone="info" text={noticeText} />} {payload && <Card><div className="mb-2 flex items-center justify-between"><SectionTitle title={payload.title} subtitle={payload.instruction} /><div className="flex gap-2"><Button variant="secondary" onClick={() => navigator.clipboard.writeText(payload.payload)}>Копировать</Button><Button variant="secondary" onClick={() => {
+      const blob = new Blob([payload.payload], { type: payload.content_type })
+      const a = document.createElement('a')
+      a.href = URL.createObjectURL(blob)
+      a.download = payload.filename ?? `${payload.key}.txt`
+      a.click()
+      URL.revokeObjectURL(a.href)
+    }}>Скачать</Button></div></div><pre className="max-h-64 overflow-auto rounded-xl border border-border bg-bg p-3 text-xs text-slate-200">{payload.payload}</pre></Card>}</div></Modal>
 }
 
 function CreateLinkModal({ open, onOpenChange, onDone }: { open: boolean; onOpenChange: (v: boolean) => void; onDone: () => void }) {

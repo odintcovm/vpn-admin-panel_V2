@@ -241,3 +241,20 @@ def test_sessions_drilldown_and_timeline():
     assert "reconnect_summary" in detail.json()
     assert timeline.status_code == 200
     assert isinstance(timeline.json(), list)
+
+
+def test_link_profiles_endpoints():
+    with TestClient(app) as client:
+        links = client.get('/api/links', headers=BASE_HEADERS).json()
+        assert links
+        link_id = links[0]['id']
+
+        formats = client.get(f'/api/links/{link_id}/profiles', headers=BASE_HEADERS)
+        assert formats.status_code == 200
+        payload = formats.json()
+        assert len(payload['formats']) >= 3
+
+        vless = client.get(f'/api/links/{link_id}/profiles/vless_uri', headers=BASE_HEADERS)
+        assert vless.status_code == 200
+        assert 'vless://' in vless.json()['payload']
+

@@ -17,6 +17,8 @@ from app.schemas.api import (
     ActionLogOut,
     AuthMeOut,
     ClientOut,
+    ClientProfilePayloadOut,
+    ClientProfilesOut,
     DashboardOverview,
     EventOut,
     HealthFreshnessOut,
@@ -202,6 +204,22 @@ def get_qr(link_id: int, db: Session = Depends(get_db), _: SecurityPrincipal = D
     if not data:
         _not_found("LINK_NOT_FOUND", "Link not found")
     return {"qr_payload": data["vless_url"], "hint": "Use this string in a QR generator", "link_name": data["name"]}
+
+
+@router.get("/links/{link_id}/profiles", response_model=ClientProfilesOut)
+def link_profiles(link_id: int, db: Session = Depends(get_db), _: SecurityPrincipal = Depends(require_permission("links.read"))):
+    data = services.get_link_profiles(db, link_id)
+    if not data:
+        _not_found("LINK_NOT_FOUND", "Link not found")
+    return data
+
+
+@router.get("/links/{link_id}/profiles/{profile_key}", response_model=ClientProfilePayloadOut)
+def link_profile_payload(link_id: int, profile_key: str, db: Session = Depends(get_db), _: SecurityPrincipal = Depends(require_permission("links.read"))):
+    data = services.get_link_profile_payload(db, link_id, profile_key)
+    if not data:
+        raise HTTPException(status_code=404, detail={"error": {"code": "PROFILE_NOT_FOUND", "message": "Profile format not found or link missing"}})
+    return data
 
 
 @router.get("/clients", response_model=list[ClientOut])

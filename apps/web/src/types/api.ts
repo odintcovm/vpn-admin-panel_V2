@@ -41,6 +41,29 @@ export type Client = {
   events: { type: string; label: string; time: string }[]
 }
 
+
+export type ClientProfileFormat = {
+  key: string
+  title: string
+  available: boolean
+  description: string
+}
+
+export type ClientProfiles = {
+  link_id: number
+  link_name: string
+  formats: ClientProfileFormat[]
+}
+
+export type ClientProfilePayload = {
+  key: string
+  title: string
+  content_type: string
+  filename?: string | null
+  payload: string
+  instruction: string
+}
+
 export type SessionItem = {
   id: number
   client_name: string

@@ -1,35 +1,166 @@
 # VPN Admin Panel V2
 
-Лёгкая, премиальная админ-панель для управления **одним Xray/VLESS сервером** на одном VPS.
+Панель управления **одним Xray/VLESS сервером**: FastAPI API, React web, Xray runtime, reverse proxy (Caddy), миграции Alembic и one-command deploy.
 
-## Что реализовано сейчас
+## Что входит в продукт
 
-- Migration-first backend baseline (Alembic-first).
-- RBAC + token-only security context (`x-api-token`) с безопасной dev-role emulation.
-- Notification Center с per-principal read-state.
-- Sessions list + Session Drilldown + Timeline (v1).
-- Global Health/Freshness Bar.
-- Action Center для критичных действий с confirm-паттерном.
-- Saved Views (local) для Links / Clients / Sessions.
+- Backend: FastAPI + SQLAlchemy + Pydantic + SQLite.
+- Frontend: React + TypeScript + Vite + Tailwind.
+- VPN backend: **только Xray** (single-node).
+- Ingress: Caddy (web + api + SSE).
+- DB discipline: migration-first (Alembic), bootstrap только dev fallback.
+- Ops baseline: deploy/update/backup/restore/restart/logs/health-check scripts.
+- Client profiles: VLESS URI, QR payload, v2rayN/v2rayNG JSON, sing-box JSON, Hiddify guide.
 
-## Архитектура
+---
 
-- **Frontend**: React + TypeScript + Vite + Tailwind + Recharts
-- **Backend**: FastAPI + SQLAlchemy + Pydantic + SQLite
-- **Realtime**: SSE (`/api/events/stream`, mock-driven)
-- **Providers**:
-  - `MockProvider` (default)
-  - `XrayProvider` (integration scaffold)
+## One-command deploy (чистая VM)
 
-## Быстрый старт
-
-### 1) Подготовить env
 ```bash
+git clone <repo>
+cd vpn-admin-panel_V2
 cp .env.example .env
-cp apps/api/.env.example apps/api/.env
+./deploy.sh prod-like
 ```
 
-### 2) Backend: install → migrate → run
+Поддерживаемые профили деплоя:
+
+```bash
+./deploy.sh dev
+./deploy.sh stage
+./deploy.sh prod-like
+```
+
+### Что делает `deploy.sh`
+
+1. Проверяет Docker/Compose.
+2. Подготавливает `.env` и профильные флаги.
+3. Генерирует Caddy config (домен/TLS или IP/self-host fallback).
+4. Поднимает runtime stack (`xray`, `api`, `web`, `proxy`).
+5. Ждёт health API.
+6. Применяет `alembic upgrade head`.
+7. Выполняет idempotent seed.
+8. Показывает URL, статус и операционные команды.
+
+---
+
+## TLS и сценарии с доменом/без домена
+
+### 1) С доменом (TLS)
+
+В `.env`:
+
+```env
+DOMAIN=vpn.example.com
+```
+
+Запуск:
+
+```bash
+./deploy.sh prod-like
+```
+
+Caddy поднимет HTTPS и получит сертификат автоматически.
+
+### 2) Без домена (self-host / IP)
+
+Оставьте `DOMAIN=` пустым.
+
+Запуск:
+
+```bash
+./deploy.sh prod-like
+```
+
+Панель будет доступна по `http://<server-ip>` без ложного обещания TLS.
+
+---
+
+## Runtime stack
+
+`docker-compose.yml` поднимает:
+
+- `xray` — VLESS inbound (baseline config `docker/xray/config.json`)
+- `api` — FastAPI
+- `web` — Vite preview build
+- `proxy` — Caddy reverse proxy
+
+### Основные команды runtime
+
+```bash
+docker compose up -d --build
+docker compose ps
+docker compose down
+```
+
+---
+
+## Migration-first и bootstrap
+
+Штатный режим: только миграции.
+
+```bash
+cd apps/api
+pip install -r requirements.txt
+PYTHONPATH=. alembic upgrade head
+```
+
+`SCHEMA_MANAGEMENT_MODE`:
+
+- `alembic` — production/stage default, startup не делает schema mutations.
+- `bootstrap` — только dev fallback для локальной разработки.
+
+---
+
+## Client Profiles (панель и API)
+
+В разделе `VLESS ссылки` есть кнопка **Profiles** для каждой ссылки.
+
+Поддерживаемые форматы:
+
+- `vless_uri`
+- `qr_payload`
+- `v2rayn_json`
+- `singbox_json`
+- `hiddify_guide`
+
+Действия в UI:
+
+- открыть формат;
+- скопировать payload;
+- скачать файл профиля.
+
+### API
+
+- `GET /api/links/{link_id}/profiles`
+- `GET /api/links/{link_id}/profiles/{profile_key}`
+
+---
+
+## Operations scripts
+
+```bash
+./scripts/health-check.sh
+./scripts/logs.sh [service]
+./scripts/restart.sh
+./scripts/backup.sh
+./scripts/restore.sh <backup.tar.gz>
+./scripts/update.sh
+```
+
+### Что покрыто
+
+- backup: SQLite + `.env` + `docker/xray/config.json`
+- restore: восстановление env/config/db + restart сервисов
+- update: `git pull` (если git repo), rebuild, migration, restart
+- health-check: быстрый статус compose + API probe
+
+---
+
+## Локальная разработка (без deploy.sh)
+
+### Backend
+
 ```bash
 cd apps/api
 python -m venv .venv
@@ -39,111 +170,31 @@ PYTHONPATH=. alembic upgrade head
 uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
-### 3) Frontend: install → run
+### Frontend
+
 ```bash
 cd apps/web
 npm install
 npm run dev
 ```
 
-## Migration-first режим
+---
 
-Штатный режим: только Alembic.
+## Manual checks
 
-```bash
-cd apps/api
-PYTHONPATH=. alembic upgrade head
-PYTHONPATH=. alembic downgrade -1
-```
+1. `./deploy.sh prod-like` (или `dev/stage`) завершается без ошибок.
+2. `./scripts/health-check.sh` возвращает OK.
+3. Панель открывается через proxy URL.
+4. SSE обновления и Health/Freshness bar видны.
+5. Session drilldown открывается из таблицы сессий.
+6. Action Center выполняет действия с confirm.
+7. В Links → Profiles можно получить минимум 2–3 формата профилей.
 
-`SCHEMA_MANAGEMENT_MODE`:
-- `alembic` (default): schema mutations на startup не выполняются.
-- `bootstrap`: dev-only fallback для локального bootstrap.
+---
 
-> В staging/production использовать только migration-first workflow.
+## Ограничения этапа (вне scope)
 
-## Security / RBAC
-
-- `x-api-token` сохранён и совместим.
-- `x-role` работает только при `APP_ENV in {development, dev, local, test}` + `DEV_ROLE_EMULATION=true`.
-- `/api/auth/me` возвращает `subject_id`, `role`, `permissions`, `auth_mode`, `user_id`, `dev_role_emulation_enabled`.
-
-## UX-модули этого спринта
-
-### Action Center
-Критичные действия через единый confirm-паттерн:
-- restart
-- reload
-- regenerate UUID
-- enable/disable link
-- mark suspicious
-
-API: `POST /api/actions/execute`.
-
-### Session Drilldown
-- Открытие детализации сессии из таблицы.
-- Показ ключевых полей + reconnect summary + related events.
-- Timeline v1 в боковой карточке.
-
-API:
-- `GET /api/sessions/{id}/drilldown`
-- `GET /api/timeline/sessions/{id}`
-
-### Health / Freshness Bar
-Глобальная панель состояния:
-- provider/backend status
-- SSE status (client-side)
-- last refresh
-- freshness/degraded indications
-
-API: `GET /api/system/health`.
-
-### Saved Views (local)
-- Links / Clients / Sessions.
-- Сохраняются в localStorage (без backend persistence на текущем этапе).
-
-## Notifications
-
-- Источник истины read-state: `notification_reads`.
-- Legacy `notifications.is_read` оставлен как compatibility слой и не участвует в business truth.
-
-## API surface (добавлено/обновлено)
-
-- `GET /api/system/health`
-- `POST /api/actions/execute`
-- `GET /api/sessions/{id}/drilldown`
-- `GET /api/timeline/sessions/{id}`
-
-Также сохранены существующие `/api/auth/me`, `/api/links*`, `/api/clients*`, `/api/sessions*`, `/api/notifications*`, `/api/server/*` и т.д.
-
-## Обязательные проверки после pull
-
-```bash
-# backend
-cd apps/api
-pip install -r requirements.txt
-PYTHONPATH=. alembic upgrade head
-pytest -q
-
-# frontend
-cd ../web
-npm install
-npm run build
-```
-
-## Ручная проверка новых UX-сценариев
-
-1. Открыть панель и проверить Health/Freshness Bar (backend/provider/SSE/freshness).
-2. В Links/Clients/Settings запустить критичные действия через Action Center.
-3. На странице Sessions открыть drilldown по строке, проверить timeline.
-4. Создать и применить Saved View на Links/Clients/Sessions.
-5. Проверить Notification Center (read / read-all).
-
-## Что вне scope
-
-- Полный auth lifecycle (`/auth/login`, refresh, logout, session UI)
-- Real Xray integration
-- Замена mock SSE на real event source
-- Advanced alerts engine
-- Full export center
-- Production infra hardening
+- Multi-backend VPN (WireGuard/OpenVPN) — не реализуется.
+- Full auth lifecycle UI (`login/refresh/logout`) — не реализован.
+- Distributed/multi-node deployment — не реализован.
+- Advanced alerts/export center — не в этом этапе.

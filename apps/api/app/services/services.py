@@ -275,6 +275,125 @@ def ensure_token_user_seed(db: Session) -> None:
 
 
 
+
+def _profile_connection_target(db: Session) -> tuple[str, int, str]:
+    status = db.query(ServerStatus).first()
+    host = status.domain if status and status.domain else "vpn.example.com"
+    port = status.port if status and status.port else 443
+    security = "tls" if port == 443 else "none"
+    return host, port, security
+
+def get_link_profiles(db: Session, link_id: int) -> dict | None:
+    link = db.query(UserLink).filter(UserLink.id == link_id).first()
+    if not link:
+        return None
+
+    return {
+        "link_id": link.id,
+        "link_name": link.name,
+        "formats": [
+            {"key": "vless_uri", "title": "VLESS URI", "available": True, "description": "Универсальный URI для большинства Xray/VLESS клиентов"},
+            {"key": "qr_payload", "title": "QR Payload", "available": True, "description": "Строка для генерации QR-кода"},
+            {"key": "v2rayn_json", "title": "v2rayN JSON", "available": True, "description": "Импортируемый JSON профиль для v2rayN/v2rayNG"},
+            {"key": "singbox_json", "title": "sing-box JSON", "available": True, "description": "Минимальный outbound профиль для совместимых клиентов"},
+            {"key": "hiddify_guide", "title": "Hiddify Guide", "available": True, "description": "Человекочитаемая инструкция подключения"},
+        ],
+    }
+
+
+def get_link_profile_payload(db: Session, link_id: int, profile_key: str) -> dict | None:
+    link = db.query(UserLink).filter(UserLink.id == link_id).first()
+    if not link:
+        return None
+
+    host, port, security = _profile_connection_target(db)
+    uri = f"vless://{link.uuid}@{host}:{port}?security={security}&type=tcp#{link.name}"
+
+    if profile_key == "vless_uri":
+        return {
+            "key": "vless_uri",
+            "title": "VLESS URI",
+            "content_type": "text/plain",
+            "filename": f"{link.name}.txt",
+            "payload": uri,
+            "instruction": "Скопируйте URI и импортируйте в ваш VLESS-клиент.",
+        }
+
+    if profile_key == "qr_payload":
+        return {
+            "key": "qr_payload",
+            "title": "QR Payload",
+            "content_type": "text/plain",
+            "filename": f"{link.name}-qr.txt",
+            "payload": uri,
+            "instruction": "Передайте строку в любой QR-генератор и сканируйте в клиенте.",
+        }
+
+    if profile_key == "v2rayn_json":
+        payload = {
+            "v": "2",
+            "ps": link.name,
+            "add": host,
+            "port": str(port),
+            "id": link.uuid,
+            "aid": "0",
+            "net": "tcp",
+            "type": "none",
+            "host": "",
+            "path": "",
+            "tls": "tls" if security == "tls" else "none",
+        }
+        return {
+            "key": "v2rayn_json",
+            "title": "v2rayN/v2rayNG JSON",
+            "content_type": "application/json",
+            "filename": f"{link.name}-v2rayn.json",
+            "payload": json.dumps(payload, ensure_ascii=False, indent=2),
+            "instruction": "Импортируйте JSON как пользовательский профиль (custom config).",
+        }
+
+    if profile_key == "singbox_json":
+        payload = {
+            "outbounds": [
+                {
+                    "type": "vless",
+                    "tag": link.name,
+                    "server": host,
+                    "server_port": port,
+                    "uuid": link.uuid,
+                    "tls": {"enabled": security == "tls"},
+                    "transport": {"type": "tcp"},
+                }
+            ]
+        }
+        return {
+            "key": "singbox_json",
+            "title": "sing-box JSON",
+            "content_type": "application/json",
+            "filename": f"{link.name}-singbox.json",
+            "payload": json.dumps(payload, ensure_ascii=False, indent=2),
+            "instruction": "Добавьте outbound в конфиг sing-box и выберите его как активный.",
+        }
+
+    if profile_key == "hiddify_guide":
+        guide = (
+            f"1) Откройте Hiddify и нажмите Add Profile\n"
+            f"2) Выберите Import from Clipboard\n"
+            f"3) Вставьте URI: {uri}\n"
+            f"4) Сохраните и активируйте профиль {link.name}"
+        )
+        return {
+            "key": "hiddify_guide",
+            "title": "Hiddify Guide",
+            "content_type": "text/plain",
+            "filename": f"{link.name}-hiddify.txt",
+            "payload": guide,
+            "instruction": "Выполните шаги в Hiddify для подключения.",
+        }
+
+    return None
+
+
 def seed_if_empty(db: Session):
     if db.query(UserLink).count() > 0:
         return

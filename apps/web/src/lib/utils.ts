@@ -5,7 +5,7 @@ export function cn(...inputs: Array<string | false | null | undefined>) {
   return twMerge(clsx(inputs))
 }
 
-export const apiBase = import.meta.env.VITE_API_URL ?? 'http://localhost:8000'
+export const apiBase = import.meta.env.VITE_API_URL ?? ''
 export const apiToken = import.meta.env.VITE_API_TOKEN ?? 'admin-token'
 
 export type ApiError = {

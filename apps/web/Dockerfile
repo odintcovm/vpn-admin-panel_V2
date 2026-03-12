@@ -1,6 +1,12 @@
 FROM node:20-alpine
 WORKDIR /app
+ARG VITE_API_URL=/
+ARG VITE_API_TOKEN=admin-token
+ENV VITE_API_URL=${VITE_API_URL}
+ENV VITE_API_TOKEN=${VITE_API_TOKEN}
 COPY package.json package-lock.json* ./
-RUN npm install
+RUN npm ci
 COPY . .
-CMD ["npm", "run", "dev"]
+RUN npm run build
+EXPOSE 4173
+CMD ["npm", "run", "preview", "--", "--host", "0.0.0.0", "--port", "4173"]
