@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Frontend install
+        working-directory: apps/web
+        run: npm ci
+
+      - name: Frontend typecheck/build
+        working-directory: apps/web
+        run: npm run build
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Backend install
+        run: pip install -r apps/api/requirements.txt
+
+      - name: Backend smoke tests
+        working-directory: apps/api
+        run: pytest -q
