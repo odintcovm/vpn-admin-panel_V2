@@ -1,3 +1,4 @@
+import hashlib
 import json
 import uuid
 from datetime import datetime, timedelta
@@ -9,11 +10,13 @@ from app.core.security import ROLE_PERMISSION_MAP
 from app.models.entities import (
     AdminActionLog,
     ClientSession,
+    AuthSession,
     Notification,
     NotificationRead,
     Permission,
     Role,
     RolePermission,
+    User,
     ServerStatus,
     SessionRecord,
     SystemEvent,
@@ -175,7 +178,7 @@ def list_notifications(db: Session, principal_id: str, unread_only: bool = False
     )
 
     if unread_only:
-        query = query.filter(notification_read.id.is_(None)).filter(Notification.is_read.is_(False))
+        query = query.filter(notification_read.id.is_(None))
 
     rows = query.offset(offset).limit(limit).all()
 
@@ -247,10 +250,37 @@ def mark_all_notifications_read(db: Session, principal_id: str) -> int:
     return created
 
 
+def ensure_token_user_seed(db: Session) -> None:
+    token = "admin-token"
+    token_fingerprint = hashlib.sha256(token.encode("utf-8")).hexdigest()[:16]
+
+    user = db.query(User).filter(User.token_fingerprint == token_fingerprint).first()
+    if not user:
+        user = User(
+            username=f"token-admin-{token_fingerprint}",
+            role_key="owner",
+            auth_source="token",
+            token_fingerprint=token_fingerprint,
+            is_active=True,
+            created_at=datetime.utcnow(),
+            last_seen_at=datetime.utcnow(),
+        )
+        db.add(user)
+        db.flush()
+
+    subject = f"token:{token_fingerprint}:owner"
+    exists = db.query(AuthSession).filter(AuthSession.subject == subject).first()
+    if not exists:
+        db.add(AuthSession(user_id=user.id, subject=subject, session_type="token", issued_at=datetime.utcnow(), expires_at=None, revoked_at=None))
+
+
+
 def seed_if_empty(db: Session):
     if db.query(UserLink).count() > 0:
         return
     now = datetime.utcnow()
+
+    ensure_token_user_seed(db)
 
     for role_key in ROLE_PERMISSION_MAP.keys():
         db.add(Role(key=role_key, name=role_key.capitalize(), description="System role"))

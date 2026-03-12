@@ -21,7 +21,7 @@ app.add_middleware(
 
 @app.on_event("startup")
 def startup_event():
-    if settings.schema_management_mode == "bootstrap":
+    if settings.schema_management_mode == "bootstrap" and settings.is_dev_like:
         Base.metadata.create_all(bind=engine)
 
     inspector = inspect(engine)

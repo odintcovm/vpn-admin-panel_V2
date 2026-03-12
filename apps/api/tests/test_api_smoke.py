@@ -1,5 +1,8 @@
 import os
+import sqlite3
+import subprocess
 import sys
+from pathlib import Path
 
 from fastapi.testclient import TestClient
 
@@ -9,7 +12,9 @@ os.environ.setdefault("APP_ENV", "development")
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 
 from app.core.config import get_settings
-from app.main import app
+from app.db.database import SessionLocal
+from app.main import app, startup_event
+from app.models.entities import Notification
 
 
 BASE_HEADERS = {"x-api-token": "admin-token"}
@@ -71,6 +76,8 @@ def test_auth_me_allows_x_role_in_dev_when_enabled(monkeypatch):
     assert payload["role"] == "readonly"
     assert payload["dev_role_emulation_enabled"] is True
     assert payload["subject_id"].startswith("token:")
+    assert payload["auth_mode"] == "token"
+    assert payload["user_id"] is not None
     assert "notifications.read" in payload["permissions"]
 
 
@@ -109,6 +116,25 @@ def test_notifications_read_state_is_per_principal(monkeypatch):
     assert owner_item["is_read"] is False
 
 
+def test_notification_legacy_flag_is_not_source_of_truth(monkeypatch):
+    monkeypatch.setenv("APP_ENV", "development")
+    monkeypatch.setenv("DEV_ROLE_EMULATION", "true")
+    _reset_settings_cache()
+
+    with SessionLocal() as db:
+        notification = db.query(Notification).first()
+        assert notification is not None
+        notification.is_read = True
+        db.commit()
+        notification_id = notification.id
+
+    with TestClient(app) as client:
+        response = client.get("/api/notifications", headers=_headers("owner"))
+
+    item = next(row for row in response.json() if row["id"] == notification_id)
+    assert item["is_read"] is False
+
+
 def test_sessions_active_filter(monkeypatch):
     monkeypatch.setenv("APP_ENV", "development")
     monkeypatch.setenv("DEV_ROLE_EMULATION", "true")
@@ -127,3 +153,53 @@ def test_server_status():
     with TestClient(app) as client:
         response = client.get("/api/server/status", headers=BASE_HEADERS)
     assert response.status_code == 200
+
+
+def test_startup_does_not_call_create_all_in_alembic_mode(monkeypatch):
+    import app.main as main_module
+
+    called = {"value": False}
+
+    def fake_create_all(*args, **kwargs):
+        called["value"] = True
+
+    monkeypatch.setattr(main_module.settings, "schema_management_mode", "alembic")
+    monkeypatch.setattr(main_module.Base.metadata, "create_all", fake_create_all)
+
+    startup_event()
+    assert called["value"] is False
+
+
+def test_startup_calls_create_all_only_in_bootstrap_dev(monkeypatch):
+    import app.main as main_module
+
+    called = {"value": False}
+
+    def fake_create_all(*args, **kwargs):
+        called["value"] = True
+
+    monkeypatch.setattr(main_module.settings, "schema_management_mode", "bootstrap")
+    monkeypatch.setattr(main_module.settings, "app_env", "development")
+    monkeypatch.setattr(main_module.Base.metadata, "create_all", fake_create_all)
+
+    startup_event()
+    assert called["value"] is True
+
+
+def test_alembic_upgrade_head_creates_core_tables(tmp_path):
+    db_file = tmp_path / "migration_test.db"
+    db_url = f"sqlite:///{db_file}"
+    env = os.environ.copy()
+    env["DATABASE_URL"] = db_url
+
+    subprocess.run(["alembic", "upgrade", "head"], cwd=Path(__file__).resolve().parents[1], check=True, env={**env, "PYTHONPATH": "."})
+
+    con = sqlite3.connect(db_file)
+    try:
+        tables = {row[0] for row in con.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+    finally:
+        con.close()
+
+    assert "notification_reads" in tables
+    assert "user_links" in tables
+    assert "users" in tables

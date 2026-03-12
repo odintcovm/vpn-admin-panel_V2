@@ -69,6 +69,8 @@ export type AuthMe = {
   subject_id: string
   role: string
   permissions: string[]
+  auth_mode: string
+  user_id?: number | null
   dev_role_emulation_enabled: boolean
 }
 

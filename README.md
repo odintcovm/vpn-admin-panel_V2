@@ -2,19 +2,19 @@
 
 Лёгкая, аккуратная админ-панель для управления **одним Xray/VLESS сервером** на одном VPS.
 
-## Что реализовано в Foundation + Hardening Sprint
+## Что реализовано в Foundation + Stabilization
 - RBAC scaffolding (roles/permissions + backend guards)
 - Hardening для `x-role` dev-эмуляции (явный флаг + запрет вне dev/test)
-- Unified UI states framework (loading/empty/error/retry/skeleton/inline notice)
+- Migration-first база на Alembic (штатный запуск без неявных schema mutations)
 - Persistent Notification Center с per-principal read-state
 - Sessions API + отдельная страница Sessions
+- Auth foundation (`users`, `auth_sessions`) без поломки token-only режима
 - CI baseline (GitHub Actions)
-- DB migration baseline (Alembic)
 
 ## Архитектура (кратко)
 - **Frontend**: React + TypeScript + Vite + Tailwind + shadcn/ui-style components + Recharts
 - **Backend**: FastAPI + SQLAlchemy + Pydantic + SQLite
-- **Realtime**: SSE (`/api/events/stream`)
+- **Realtime**: SSE (`/api/events/stream`, mock-driven)
 - **Providers**:
   - `MockProvider` (default)
   - `XrayProvider` (integration scaffold)
@@ -27,18 +27,18 @@ cp .env.example .env
 cp apps/api/.env.example apps/api/.env
 ```
 
-### 2) Запустить API
+### 2) Backend: install → migrate → run
 ```bash
 cd apps/api
 python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-python -m alembic upgrade head
+PYTHONPATH=. alembic upgrade head
 uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 ```
 API: http://localhost:8000
 
-### 3) Запустить Web
+### 3) Frontend: install → run
 ```bash
 cd apps/web
 npm install
@@ -46,55 +46,57 @@ npm run dev
 ```
 Web: http://localhost:5173
 
-## Docker Compose
-```bash
-cp .env.example .env
-docker compose up --build
-```
-- API: http://localhost:8000
-- Web: http://localhost:5173
+## Migration-first режим
 
-## Миграции и управление схемой
-
-Основной режим: **migration-first через Alembic**.
+Основной режим управления схемой: **только Alembic**.
 
 ```bash
 cd apps/api
-python -m alembic upgrade head
-python -m alembic downgrade -1
+PYTHONPATH=. alembic upgrade head
+PYTHONPATH=. alembic downgrade -1
 ```
 
-Переменная `SCHEMA_MANAGEMENT_MODE`:
-- `alembic` (по умолчанию) — безопасный режим, `create_all()` не вызывается.
-- `bootstrap` — одноразовый локальный bootstrap (не использовать в staging/production).
+### SCHEMA_MANAGEMENT_MODE
+- `alembic` (по умолчанию): безопасный штатный режим. Приложение **не** выполняет `create_all()`.
+- `bootstrap`: dev-only fallback для одноразового локального старта. Разрешён только в dev-like окружении.
 
-## RBAC и безопасность
+> Для staging/production использовать только migration-first workflow.
+
+## RBAC и token совместимость
 
 ### Совместимость с `x-api-token`
-- Текущий `x-api-token` механизм сохранён.
-- По умолчанию токен маппится на privileged context (`owner`) в token-only режиме.
+- Текущий `x-api-token` сценарий сохранён.
+- По умолчанию токен маппится на privileged context (`owner`).
 
 ### `x-role` (только для dev/test)
-Role emulation включается **только** при одновременном выполнении условий:
-- `APP_ENV` в dev-like окружении (`development/dev/local/test`)
+Role emulation включается только при:
+- `APP_ENV in {development, dev, local, test}`
 - `DEV_ROLE_EMULATION=true`
 
-Иначе передача заголовка `x-role` вернёт:
+Иначе `x-role` возвращает:
 - `403`
 - `error.code = DEV_ROLE_EMULATION_DISABLED`
 
-Проверка текущего security context:
+Проверка контекста:
 - `GET /api/auth/me`
-- возвращает `subject_id`, `role`, `permissions`, `dev_role_emulation_enabled`
+- возвращает `subject_id`, `role`, `permissions`, `auth_mode`, `user_id`, `dev_role_emulation_enabled`
 
-## Notification Center
-- Уведомления хранятся в таблице `notifications`.
-- Статус прочтения хранится **per-principal** в `notification_reads`.
-- Поддерживаются endpoints:
+## Auth foundation (текущий статус)
+
+Подготовлены базовые сущности для следующего auth-спринта:
+- `users`
+- `auth_sessions`
+
+Текущий режим остаётся token-only. Полный lifecycle (`login/refresh/logout/session UI`) пока не реализован.
+
+## Notifications
+
+- Статус прочтения хранится в `notification_reads` (per-principal).
+- Legacy `notifications.is_read` оставлен как временный compatibility слой, но **не используется как источник истины**.
+- Endpoints:
   - `GET /api/notifications`
   - `POST /api/notifications/{id}/read`
   - `POST /api/notifications/read-all`
-- SSE поток `/api/events/stream` сохранён (mock/live signal).
 
 ## API surface (актуально)
 - `GET /api/auth/me`
@@ -123,7 +125,7 @@ Role emulation включается **только** при одновремен
 - `GET /api/events/stream`
 
 ## CI
-GitHub Actions workflow `.github/workflows/ci.yml` проверяет:
+GitHub Actions `.github/workflows/ci.yml`:
 - frontend install + build/typecheck
 - backend install
 - backend tests (`pytest`)
@@ -133,7 +135,7 @@ GitHub Actions workflow `.github/workflows/ci.yml` проверяет:
 # backend
 cd apps/api
 pip install -r requirements.txt
-python -m alembic upgrade head
+PYTHONPATH=. alembic upgrade head
 pytest -q
 
 # frontend
@@ -142,8 +144,10 @@ npm install
 npm run build
 ```
 
-## Ограничения текущего этапа
-- Полный auth lifecycle (`/auth/login`, refresh, logout) ещё не внедрён
-- Real Xray integration остаётся scaffold
-- SSE сейчас mock-driven, не полный event bus от real backend telemetry
-- Advanced alerts engine и export center — в следующих спринтах
+## Что вне scope текущего этапа
+- Полный auth lifecycle (`/auth/login`, refresh, logout, session store + UI)
+- Real Xray integration
+- Замена mock SSE на real event source
+- Advanced alerts engine
+- Full export center
+- Production infra hardening

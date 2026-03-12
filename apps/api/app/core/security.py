@@ -1,10 +1,14 @@
 import hashlib
 from dataclasses import dataclass
+from datetime import datetime
 from typing import FrozenSet
 
 from fastapi import Depends, Header, HTTPException, status
+from sqlalchemy.orm import Session
 
 from app.core.config import Settings, get_settings
+from app.db.database import get_db
+from app.models.entities import User
 
 ROLE_PERMISSION_MAP = {
     "owner": {
@@ -86,6 +90,8 @@ class SecurityPrincipal:
     role: str
     permissions: FrozenSet[str]
     token_fingerprint: str
+    auth_mode: str
+    user_id: int | None
 
 
 def _error(status_code: int, code: str, message: str) -> HTTPException:
@@ -113,18 +119,52 @@ def _resolve_role(settings: Settings, x_role: str | None) -> str:
     return x_role
 
 
+def _resolve_or_create_token_user(db: Session, token_fingerprint: str, role: str) -> User | None:
+    user = db.query(User).filter(User.token_fingerprint == token_fingerprint).first()
+    if user:
+        if user.role_key != role:
+            user.role_key = role
+        user.last_seen_at = datetime.utcnow()
+        db.commit()
+        return user
+
+    user = User(
+        username=f"token-admin-{token_fingerprint}",
+        role_key=role,
+        auth_source="token",
+        token_fingerprint=token_fingerprint,
+        is_active=True,
+        created_at=datetime.utcnow(),
+        last_seen_at=datetime.utcnow(),
+    )
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+    return user
+
+
 def get_current_principal(
     x_api_token: str = Header(default=None, alias="x-api-token"),
     x_role: str | None = Header(default=None, alias="x-role"),
     settings: Settings = Depends(get_settings),
+    db: Session = Depends(get_db),
 ) -> SecurityPrincipal:
     if not x_api_token or x_api_token != settings.api_token:
         raise _error(status.HTTP_401_UNAUTHORIZED, "INVALID_API_TOKEN", "Missing or invalid x-api-token")
 
     role = _resolve_role(settings, x_role)
     fingerprint = _token_fingerprint(x_api_token)
+    user = _resolve_or_create_token_user(db, fingerprint, role)
+
     subject_id = f"token:{fingerprint}:{role}"
-    return SecurityPrincipal(subject_id=subject_id, role=role, permissions=frozenset(ROLE_PERMISSION_MAP[role]), token_fingerprint=fingerprint)
+    return SecurityPrincipal(
+        subject_id=subject_id,
+        role=role,
+        permissions=frozenset(ROLE_PERMISSION_MAP[role]),
+        token_fingerprint=fingerprint,
+        auth_mode="token",
+        user_id=user.id if user else None,
+    )
 
 
 def require_permission(permission_key: str):

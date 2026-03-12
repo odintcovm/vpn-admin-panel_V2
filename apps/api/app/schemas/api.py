@@ -119,4 +119,6 @@ class AuthMeOut(BaseModel):
     subject_id: str
     role: str
     permissions: list[str]
+    auth_mode: str
+    user_id: int | None = None
     dev_role_emulation_enabled: bool

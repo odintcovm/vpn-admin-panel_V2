@@ -45,6 +45,8 @@ def auth_me(principal: SecurityPrincipal = Depends(get_current_principal)):
         subject_id=principal.subject_id,
         role=principal.role,
         permissions=sorted(principal.permissions),
+        auth_mode=principal.auth_mode,
+        user_id=principal.user_id,
         dev_role_emulation_enabled=settings.dev_role_emulation and settings.is_dev_like,
     )
 

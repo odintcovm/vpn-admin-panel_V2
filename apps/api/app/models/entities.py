@@ -31,6 +31,35 @@ class RolePermission(Base):
     permission_key: Mapped[str] = mapped_column(String(64), nullable=False)
 
 
+class User(Base):
+    __tablename__ = "users"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    username: Mapped[str] = mapped_column(String(120), unique=True, nullable=False)
+    role_key: Mapped[str] = mapped_column(String(32), nullable=False, default="owner")
+    auth_source: Mapped[str] = mapped_column(String(32), nullable=False, default="token")
+    token_fingerprint: Mapped[str | None] = mapped_column(String(64), unique=True, nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    sessions = relationship("AuthSession", back_populates="user", cascade="all, delete-orphan")
+
+
+class AuthSession(Base):
+    __tablename__ = "auth_sessions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    subject: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
+    session_type: Mapped[str] = mapped_column(String(32), nullable=False, default="token")
+    issued_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+    user = relationship("User", back_populates="sessions")
+
+
 class UserLink(Base):
     __tablename__ = "user_links"
 
@@ -92,7 +121,7 @@ class Notification(Base):
     message: Mapped[str] = mapped_column(Text, nullable=False)
     entity_type: Mapped[str | None] = mapped_column(String(32), nullable=True)
     entity_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    # legacy fallback, keep for backward compatibility
+    # TODO(next sprint): drop legacy column after full data migration to notification_reads.
     is_read: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
