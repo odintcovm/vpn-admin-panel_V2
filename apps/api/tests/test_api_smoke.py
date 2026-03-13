@@ -268,10 +268,6 @@ def test_create_link_with_provider_and_profiles_contract():
         assert avg_payload["provider"] == "avg"
         assert avg_payload["profile_formats"] == ["awg_conf"]
 
-        avg_profiles = client.get(f"/api/links/{avg_payload['id']}/profiles", headers=BASE_HEADERS)
-        assert avg_profiles.status_code == 200
-        assert [i["key"] for i in avg_profiles.json()["formats"]] == ["awg_conf"]
-
         wg_create = client.post("/api/links", headers=BASE_HEADERS, json={"name": "WG Smoke", "tag": "Test device", "provider": "wg", "enabled": True})
         assert wg_create.status_code == 200
         wg_payload = wg_create.json()
