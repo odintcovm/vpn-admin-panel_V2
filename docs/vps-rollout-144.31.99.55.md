@@ -6,17 +6,7 @@
 
 ```bash
 cd /opt/vpn-admin-panel_V2
-```
-
-Проверь compose binary:
-
-```bash
 docker compose version || docker-compose version
-```
-
-Проверь, что host Xray жив:
-
-```bash
 systemctl status xray --no-pager
 ss -ltnp | grep ':443'
 ```
@@ -43,11 +33,16 @@ cp -n .env.example .env
 sed -i 's/^APP_ENV=.*/APP_ENV=production/' .env
 sed -i 's/^DEV_ROLE_EMULATION=.*/DEV_ROLE_EMULATION=false/' .env
 sed -i 's/^SCHEMA_MANAGEMENT_MODE=.*/SCHEMA_MANAGEMENT_MODE=alembic/' .env
+sed -i 's/^APP_PROVIDER=.*/APP_PROVIDER=xray/' .env
 
 # keep host dataplane untouched
 sed -i 's/^ENABLE_TLS_PROXY=.*/ENABLE_TLS_PROXY=false/' .env
 sed -i 's/^ENABLE_XRAY_PUBLIC=.*/ENABLE_XRAY_PUBLIC=false/' .env
 sed -i 's/^DOMAIN=.*/DOMAIN=/' .env
+
+# auth bootstrap
+sed -i 's/^ADMIN_USERNAME=.*/ADMIN_USERNAME=admin/' .env
+# рекомендуется заранее задать ADMIN_PASSWORD_HASH
 ```
 
 ## 4) Deploy
@@ -62,11 +57,13 @@ sed -i 's/^DOMAIN=.*/DOMAIN=/' .env
 ./scripts/health-check.sh
 curl -s http://127.0.0.1/health
 curl -s -H 'x-api-token: admin-token' http://127.0.0.1/api/auth/me
+curl -s -H 'x-api-token: admin-token' http://127.0.0.1/api/providers
 curl -s -H 'x-api-token: admin-token' http://127.0.0.1/api/links | head -c 300
 ```
 
 UI checks:
 - открыть `http://144.31.99.55`
+- login form
 - открыть `VLESS ссылки` -> `Profiles`
 - проверить copy/download payload
 
@@ -77,18 +74,14 @@ ss -ltnp | grep ':443'
 systemctl status xray --no-pager
 ```
 
-Ожидание: 443 остаётся за host Xray/service unit, не за proxy контейнером панели.
-
 ## 7) Fast rollback
-
-Вариант A — rollback DB/config/env из backup:
 
 ```bash
 ./scripts/restore.sh backups/<backup_file>.tar.gz
 ./scripts/health-check.sh
 ```
 
-Вариант B — откат к предыдущему git-коммиту + redeploy:
+или
 
 ```bash
 git log --oneline -n 5
@@ -96,13 +89,3 @@ git checkout <previous_commit>
 ./deploy.sh prod-like
 ./scripts/health-check.sh
 ```
-
-## 8) Optional TLS mode (only if 443 is intentionally free)
-
-```bash
-sed -i 's/^DOMAIN=.*/DOMAIN=panel.example.com/' .env
-sed -i 's/^ENABLE_TLS_PROXY=.*/ENABLE_TLS_PROXY=true/' .env
-./deploy.sh prod-like
-```
-
-> Не включать на данном VPS, если host Xray уже использует 443.

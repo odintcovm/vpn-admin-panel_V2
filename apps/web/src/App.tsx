@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { Badge, Button, Card, EmptyState, ErrorState, InlineNotice, Input, LoadingState, Modal, SectionTitle, SkeletonBlock } from './components/ui'
-import { apiFetch, apiToken, cn } from './lib/utils'
+import { apiFetch, cn } from './lib/utils'
 import type {
   ActionExecuteIn,
   ActionExecuteOut,
@@ -84,6 +84,11 @@ export function App() {
   const [sessionDrilldownLoading, setSessionDrilldownLoading] = useState(false)
 
   const [savedViews, setSavedViews] = useState<SavedView[]>(() => loadViews(tab))
+  const [authReady, setAuthReady] = useState(false)
+  const [isAuthenticated, setIsAuthenticated] = useState(false)
+  const [loginName, setLoginName] = useState('admin')
+  const [loginPassword, setLoginPassword] = useState('')
+  const [loginError, setLoginError] = useState<string | null>(null)
 
   async function load() {
     setLoading(true)
@@ -114,9 +119,22 @@ export function App() {
   }, [tab])
 
   useEffect(() => {
-    load()
+    apiFetch('/api/auth/me')
+      .then(() => {
+        setIsAuthenticated(true)
+        setAuthReady(true)
+        load()
+      })
+      .catch(() => {
+        setIsAuthenticated(false)
+        setAuthReady(true)
+      })
+  }, [])
+
+  useEffect(() => {
+    if (!isAuthenticated) return
     const base = import.meta.env.VITE_API_URL ?? ''
-    const src = new EventSource(`${base}/api/events/stream?token=${apiToken}`)
+    const src = new EventSource(`${base}/api/events/stream`)
     src.onopen = () => setSseState('connected')
     src.onmessage = (event) => {
       if (!pushEnabled) return
@@ -146,7 +164,7 @@ export function App() {
       src.close()
     }
     return () => src.close()
-  }, [pushEnabled])
+  }, [pushEnabled, isAuthenticated])
 
   useEffect(() => { if (!notice) return; const t = setTimeout(() => setNotice(null), 2500); return () => clearTimeout(t) }, [notice])
   useEffect(() => { if (!pushNotices.length) return; const t = setTimeout(() => setPushNotices((prev) => prev.slice(0, -1)), 6000); return () => clearTimeout(t) }, [pushNotices])
@@ -210,8 +228,44 @@ export function App() {
     setNotice('Представление сохранено')
   }
 
+  async function handleLogin() {
+    setLoginError(null)
+    try {
+      await apiFetch('/api/auth/login', {
+        method: 'POST',
+        body: JSON.stringify({ username: loginName, password: loginPassword })
+      })
+      setIsAuthenticated(true)
+      await load()
+    } catch (e) {
+      setLoginError((e as Error).message)
+    }
+  }
+
+  async function handleLogout() {
+    try {
+      await apiFetch('/api/auth/logout', { method: 'POST' })
+    } finally {
+      setIsAuthenticated(false)
+      setOverview(null)
+    }
+  }
+
   return (
     <div className="min-h-screen bg-bg p-4 font-['Inter'] text-slate-100 md:p-6">
+      {!authReady ? <LoadingState text="Проверка сессии..." /> : !isAuthenticated ? (
+        <div className="mx-auto mt-12 max-w-md">
+          <Card>
+            <SectionTitle title="Вход в панель" subtitle="Требуется авторизация" />
+            <div className="mt-3 grid gap-2">
+              <Input value={loginName} onChange={(e)=>setLoginName(e.target.value)} placeholder="Логин" />
+              <Input type="password" value={loginPassword} onChange={(e)=>setLoginPassword(e.target.value)} placeholder="Пароль" />
+              {loginError && <InlineNotice tone="danger" text={loginError} />}
+              <Button onClick={() => { void handleLogin() }}>Войти</Button>
+            </div>
+          </Card>
+        </div>
+      ) : (
       <div className="mx-auto max-w-7xl space-y-5">
         <header className="space-y-3 rounded-2xl border border-border bg-panel p-4 shadow-soft">
           <div className="flex flex-wrap items-center justify-between gap-3">
@@ -230,7 +284,7 @@ export function App() {
             <Button variant="ghost" onClick={() => setPushEnabled((v)=>!v)}>{pushEnabled ? 'Push: Вкл':'Push: Выкл'}</Button>
             <Button variant="secondary" onClick={() => setOpenNotifications(true)}>Уведомления ({notifications.filter(n=>!n.is_read).length})</Button>
             <Button variant="secondary" onClick={() => openActionCenter({ action: 'reload', target_type: 'server' })}>Центр действий: Reload</Button>
-            <Button variant="danger" onClick={() => openActionCenter({ action: 'restart', target_type: 'server' })}>Центр действий: Restart</Button>
+            <Button variant="danger" onClick={() => openActionCenter({ action: 'restart', target_type: 'server' })}>Центр действий: Restart</Button><Button variant="ghost" onClick={() => { void handleLogout() }}>Выйти</Button>
           </div>
         </header>
 
@@ -269,6 +323,7 @@ export function App() {
           {pushNotices.map((n)=><div key={n.id} className={cn('pointer-events-auto w-80 rounded-xl border p-3 shadow-soft', n.tone==='warning' ? 'border-amber-400/40 bg-amber-500/10':'border-indigo-400/40 bg-indigo-500/10')}><p className="text-sm font-semibold">{n.title}</p><p className="text-xs text-muted">{n.message}</p></div>)}
         </div>
       </div>
+      )}
     </div>
   )
 }

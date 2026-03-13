@@ -258,3 +258,31 @@ def test_link_profiles_endpoints():
         assert vless.status_code == 200
         assert 'vless://' in vless.json()['payload']
 
+
+
+def test_auth_login_and_cookie_access(monkeypatch):
+    monkeypatch.setenv("ADMIN_USERNAME", "admin")
+    monkeypatch.setenv("ADMIN_PASSWORD", "admin123")
+    monkeypatch.setenv("ADMIN_PASSWORD_HASH", "")
+    _reset_settings_cache()
+
+    with TestClient(app) as client:
+        bad = client.post("/api/auth/login", json={"username": "admin", "password": "wrong"})
+        assert bad.status_code == 401
+
+        ok = client.post("/api/auth/login", json={"username": "admin", "password": "admin123"})
+        assert ok.status_code == 200
+
+        me = client.get("/api/auth/me")
+        assert me.status_code == 200
+        assert me.json()["auth_mode"] in {"session", "token"}
+
+
+def test_providers_endpoint():
+    with TestClient(app) as client:
+        response = client.get("/api/providers", headers=BASE_HEADERS)
+    assert response.status_code == 200
+    payload = response.json()
+    assert "active_provider" in payload
+    assert any(item["name"] == "wg" for item in payload["items"])
+    assert any(item["name"] == "avg" for item in payload["items"])
