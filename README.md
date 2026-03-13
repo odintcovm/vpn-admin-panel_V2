@@ -124,7 +124,7 @@ Provider-aware форматы:
 - `avg`: `awg_conf`
 - `wg`: `wg_conf`
 
-В UI: `VLESS ссылки` -> `Создать пользователя` (с выбором протокола) -> `Profiles` для мгновенного открытия конфигураций.
+В UI: `VLESS ссылки` -> `Создать пользователя` (выбор протокола) -> `Profiles`.
 
 ## Release-readiness static validation (без Docker)
 
