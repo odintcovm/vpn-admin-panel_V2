@@ -134,11 +134,11 @@ XRAY_PUBLIC_PORT=8443
 - Caddy routing правила (`/health`, `/api/*`, SSE);
 - синхронность `Caddyfile.template` и дефолтного `Caddyfile`.
 
-## Server rollout runbook
+## Production handoff package
 
-Пошаговый runbook для VPS `144.31.99.55`:
-
-- `docs/vps-rollout-144.31.99.55.md`
+- Release note: `docs/release-note-rc-144.31.99.55.md`
+- Runbook: `docs/vps-rollout-144.31.99.55.md`
+- Operator cheatsheet: `docs/operator-cheatsheet-144.31.99.55.md`
 
 ## Ops scripts
 

@@ -33,6 +33,17 @@ read_env_value() {
   echo "${line#*=}"
 }
 
+env_or_default() {
+  local key="$1" default="$2"
+  local value
+  value="$(read_env_value "$key")"
+  if [[ -z "$value" ]]; then
+    echo "$default"
+  else
+    echo "$value"
+  fi
+}
+
 case "$MODE" in
   dev)
     set_env_value APP_ENV development
@@ -54,14 +65,19 @@ esac
 set_env_value COMPOSE_PROJECT_NAME "vpn_admin_panel"
 set_env_value APP_PROVIDER xray
 set_env_value DATABASE_URL sqlite:///./data/data.db
-set_env_value XRAY_PUBLIC_PORT "$(read_env_value XRAY_PUBLIC_PORT || echo 8443)"
-set_env_value ENABLE_TLS_PROXY "$(read_env_value ENABLE_TLS_PROXY || echo false)"
-set_env_value ENABLE_XRAY_PUBLIC "$(read_env_value ENABLE_XRAY_PUBLIC || echo false)"
+set_env_value XRAY_PUBLIC_PORT "$(env_or_default XRAY_PUBLIC_PORT 8443)"
+set_env_value ENABLE_TLS_PROXY "$(env_or_default ENABLE_TLS_PROXY false)"
+set_env_value ENABLE_XRAY_PUBLIC "$(env_or_default ENABLE_XRAY_PUBLIC false)"
 
-DOMAIN="$(read_env_value DOMAIN || true)"
-ENABLE_TLS_PROXY="$(read_env_value ENABLE_TLS_PROXY || true)"
-ENABLE_XRAY_PUBLIC="$(read_env_value ENABLE_XRAY_PUBLIC || true)"
-XRAY_PUBLIC_PORT="$(read_env_value XRAY_PUBLIC_PORT || true)"
+DOMAIN="$(read_env_value DOMAIN)"
+ENABLE_TLS_PROXY="$(env_or_default ENABLE_TLS_PROXY false)"
+ENABLE_XRAY_PUBLIC="$(env_or_default ENABLE_XRAY_PUBLIC false)"
+XRAY_PUBLIC_PORT="$(env_or_default XRAY_PUBLIC_PORT 8443)"
+
+if [[ "$ENABLE_XRAY_PUBLIC" == "true" && ! "$XRAY_PUBLIC_PORT" =~ ^[0-9]+$ ]]; then
+  echo "[ERR] XRAY_PUBLIC_PORT must be numeric when ENABLE_XRAY_PUBLIC=true"
+  exit 1
+fi
 
 if [[ "$ENABLE_TLS_PROXY" == "true" && -z "$DOMAIN" ]]; then
   echo "[WARN] ENABLE_TLS_PROXY=true but DOMAIN is empty. Falling back to HTTP :80 site address."
