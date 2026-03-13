@@ -15,15 +15,6 @@ if ! command -v docker >/dev/null 2>&1; then
   exit 1
 fi
 
-if docker compose version >/dev/null 2>&1; then
-  COMPOSE=(docker compose)
-elif command -v docker-compose >/dev/null 2>&1; then
-  COMPOSE=(docker-compose)
-else
-  echo "[ERR] Docker Compose not found."
-  exit 1
-fi
-
 [[ -f .env ]] || cp .env.example .env
 
 set_env_value() {
@@ -53,13 +44,23 @@ case "$MODE" in
     ;;
 esac
 
+set_env_value COMPOSE_PROJECT_NAME "vpn_admin_panel"
 set_env_value APP_PROVIDER xray
 set_env_value DATABASE_URL sqlite:///./data/data.db
 set_env_value XRAY_PUBLIC_PORT "$(grep -E '^XRAY_PUBLIC_PORT=' .env | cut -d'=' -f2- || echo 8443)"
+set_env_value ENABLE_TLS_PROXY "$(grep -E '^ENABLE_TLS_PROXY=' .env | cut -d'=' -f2- || echo false)"
+set_env_value ENABLE_XRAY_PUBLIC "$(grep -E '^ENABLE_XRAY_PUBLIC=' .env | cut -d'=' -f2- || echo false)"
 
 DOMAIN="$(grep -E '^DOMAIN=' .env | cut -d'=' -f2- || true)"
-SITE_ADDR="${DOMAIN:-:80}"
+ENABLE_TLS_PROXY="$(grep -E '^ENABLE_TLS_PROXY=' .env | cut -d'=' -f2- || true)"
+if [[ "$ENABLE_TLS_PROXY" == "true" && -n "$DOMAIN" ]]; then
+  SITE_ADDR="$DOMAIN"
+else
+  SITE_ADDR=":80"
+fi
 sed "s/{\$SITE_ADDR}/${SITE_ADDR}/g" docker/caddy/Caddyfile.template > docker/caddy/Caddyfile
+
+source scripts/common.sh
 
 echo "[1/5] Build & start services..."
 "${COMPOSE[@]}" up -d --build
@@ -96,7 +97,7 @@ echo "[5/5] Runtime status"
 
 HOST_IP="$(hostname -I | awk '{print $1}')"
 PANEL_URL="http://${HOST_IP}"
-if [[ -n "${DOMAIN}" ]]; then
+if [[ "$ENABLE_TLS_PROXY" == "true" && -n "$DOMAIN" ]]; then
   PANEL_URL="https://${DOMAIN}"
 fi
 
@@ -104,9 +105,18 @@ cat <<OUT
 
 === Deploy complete ===
 Mode: ${MODE}
+Compose project: vpn_admin_panel
 Panel URL: ${PANEL_URL}
 API URL: ${PANEL_URL}/api
-Logs: ./scripts/logs.sh [service]
+Health URL (proxy): ${PANEL_URL}/health
+
+Enabled runtime options:
+  ENABLE_TLS_PROXY=${ENABLE_TLS_PROXY}
+  ENABLE_XRAY_PUBLIC=$(grep -E '^ENABLE_XRAY_PUBLIC=' .env | cut -d'=' -f2-)
+  XRAY_PUBLIC_PORT=$(grep -E '^XRAY_PUBLIC_PORT=' .env | cut -d'=' -f2-)
+
+Logs:
+  ./scripts/logs.sh [service]
 
 Next operations:
   ./scripts/health-check.sh
@@ -115,7 +125,8 @@ Next operations:
   ./scripts/restart.sh
   ./scripts/restore.sh <backup_file>
 
-TLS note:
-  - DOMAIN set: Caddy requests certificates automatically.
-  - DOMAIN empty: self-host mode over HTTP (:80) without TLS automation.
+Safety notes:
+  - Base stack is safe for hosts where port 443 is already used by host Xray.
+  - To enable TLS on 443 set DOMAIN and ENABLE_TLS_PROXY=true.
+  - To publish container Xray set ENABLE_XRAY_PUBLIC=true.
 OUT

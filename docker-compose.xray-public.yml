@@ -1,0 +1,4 @@
+services:
+  xray:
+    ports:
+      - "${XRAY_PUBLIC_PORT:-8443}:8443"
