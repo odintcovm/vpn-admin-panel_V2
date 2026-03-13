@@ -1,6 +1,7 @@
 services:
   xray:
     image: teddysun/xray:latest
+    container_name: vpn_xray
     restart: unless-stopped
     volumes:
       - ./docker/xray/config.json:/etc/xray/config.json:ro
@@ -13,6 +14,7 @@ services:
 
   api:
     build: ./apps/api
+    container_name: vpn_api
     env_file:
       - .env
     environment:
@@ -22,15 +24,6 @@ services:
       - APP_ENV=${APP_ENV:-production}
       - DEV_ROLE_EMULATION=${DEV_ROLE_EMULATION:-false}
       - SCHEMA_MANAGEMENT_MODE=${SCHEMA_MANAGEMENT_MODE:-alembic}
-      - AUTH_ENABLED=${AUTH_ENABLED:-true}
-      - AUTH_COOKIE_NAME=${AUTH_COOKIE_NAME:-vpn_admin_session}
-      - AUTH_SESSION_TTL_HOURS=${AUTH_SESSION_TTL_HOURS:-24}
-      - AUTH_COOKIE_SECURE=${AUTH_COOKIE_SECURE:-false}
-      - ADMIN_USERNAME=${ADMIN_USERNAME:-admin}
-      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-admin123}
-      - ADMIN_PASSWORD_HASH=${ADMIN_PASSWORD_HASH:-}
-      - DEPLOY_MODE=${DEPLOY_MODE:-safe}
-      - PROVIDERS_ENABLED=${PROVIDERS_ENABLED:-xray,wg,avg,mock}
     volumes:
       - api_data:/app/data
     depends_on:
@@ -48,7 +41,8 @@ services:
       context: ./apps/web
       args:
         VITE_API_URL: ${VITE_API_URL:-}
-        VITE_API_TOKEN: ${VITE_API_TOKEN:-}
+        VITE_API_TOKEN: ${VITE_API_TOKEN:-admin-token}
+    container_name: vpn_web
     depends_on:
       api:
         condition: service_healthy
@@ -56,6 +50,7 @@ services:
 
   proxy:
     image: caddy:2.8
+    container_name: vpn_proxy
     restart: unless-stopped
     ports:
       - "80:80"

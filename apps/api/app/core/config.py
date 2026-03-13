@@ -13,18 +13,6 @@ class Settings(BaseSettings):
     dev_role_emulation: bool = False
     schema_management_mode: str = "alembic"  # alembic | bootstrap
 
-    auth_enabled: bool = True
-    auth_cookie_name: str = "vpn_admin_session"
-    auth_session_ttl_hours: int = 24
-    auth_cookie_secure: bool = False
-
-    admin_username: str = "admin"
-    admin_password: str = "admin123"
-    admin_password_hash: str = ""
-
-    deploy_mode: str = "safe"
-    providers_enabled: str = "xray,wg,avg,mock"
-
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
     @property

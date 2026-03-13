@@ -1,128 +1,210 @@
 # VPN Admin Panel V2
 
-Лёгкая админ-панель для одиночного VPS с provider-aware runtime (`xray`, `wg`, `avg`, `mock`) и базовой авторизацией.
+Панель управления **одним Xray/VLESS сервером**: FastAPI API, React web, Xray runtime, Caddy reverse proxy, Alembic migration-first.
 
 ## Что включено
 
-- Backend: FastAPI + SQLAlchemy + Alembic + SQLite.
+- Backend: FastAPI + SQLAlchemy + Pydantic + SQLite.
 - Frontend: React + TypeScript + Vite + Tailwind.
-- Ingress: Caddy.
-- Runtime deploy modes: `safe`, `full`, `behind-ingress`.
-- Provider registry + capability flags.
-- Auth baseline: login/logout + cookie session + token fallback.
+- VPN backend: Xray only (single server).
+- UX: Health/Freshness, Action Center, Session Drilldown, Saved Views, Timeline.
+- Client profiles: `vless_uri`, `qr_payload`, `v2rayn_json`, `singbox_json`, `hiddify_guide`.
+- Ops scripts: deploy, health-check, logs, restart, backup, restore, update.
 
-## Быстрый старт на новой VM/VPS
+## Docker Compose compatibility
+
+Сценарии поддерживают оба варианта:
+
+- `docker compose` (v2)
+- `docker-compose` (v1.29.2)
+
+Проектное имя задаётся через `COMPOSE_PROJECT_NAME` (по умолчанию `vpn_admin_panel`), поэтому **top-level `name:` в compose не используется**.
+
+## Runtime layout (server-friendly)
+
+Base stack (`docker-compose.yml`) безопасен для VPS, где:
+
+- порт `443` уже занят host Xray;
+- нельзя ломать боевой dataplane.
+
+По умолчанию:
+
+- proxy публикует только `80:80`;
+- контейнерный Xray не публикуется наружу.
+
+Опциональные override-файлы:
+
+- `docker-compose.tls.yml` — включает публикацию `443:443` для proxy;
+- `docker-compose.xray-public.yml` — включает публикацию `${XRAY_PUBLIC_PORT}:8443` для контейнерного Xray.
+
+## Install/bootstrap flow (recommended)
 
 ```bash
 git clone <repo>
 cd vpn-admin-panel_V2
-./install.sh safe xray
+./install.sh prod-like
 ```
 
-`install.sh` делает:
-1. preflight (`scripts/doctor.sh`)
-2. env bootstrap
-3. deploy (`deploy.sh`)
-4. post-deploy validation (`scripts/post-deploy-check.sh`)
+`install.sh` автоматически:
+- создаёт `.env` из `.env.example` (если отсутствует);
+- запускает static release checks;
+- запускает doctor/preflight;
+- выполняет deploy;
+- запускает post-deploy validation.
 
-## Deploy modes
+Поддерживаемые профили:
 
-### `safe` (по умолчанию)
-- панель только на `80`
-- не требует `443`
-- безопасен для VPS, где `443` уже занят host Xray
-
-### `full`
-- для чистой VM
-- включает TLS publish и публичный provider runtime
-- требует свободный `443` и валидный `DOMAIN`
-
-### `behind-ingress`
-- для запуска за внешним ingress/reverse proxy
-- локальный proxy без внешней публикации портов
-
-## Provider support (v1)
-
-- `xray`: baseline, полный текущий MVP-путь.
-- `wg`: staged runtime path + capability-aware ограничения.
-- `avg`: staged runtime path + ограниченные возможности.
-- `mock`: локальный fallback.
-
-API каталог providers:
-- `GET /api/providers`
-
-## Auth baseline
-
-### API
-- `POST /api/auth/login`
-- `POST /api/auth/logout`
-- `GET /api/auth/me`
-
-### Как включается
-- `AUTH_ENABLED=true`
-- `ADMIN_USERNAME`
-- `ADMIN_PASSWORD_HASH` (рекомендуется) или `ADMIN_PASSWORD` (bootstrap/dev fallback)
-
-Хеш пароля:
 ```bash
-./scripts/hash-password.sh 'your-strong-password'
+./install.sh dev
+./install.sh stage
+./install.sh prod-like
+
+# или прямой deploy
+./deploy.sh prod-like
 ```
 
-`/health` остаётся публичным для ops checks.
+### Что делает `deploy.sh`
 
-## Runtime stack и overrides
+1. Проверяет Docker.
+2. Подготавливает/обновляет `.env` под выбранный профиль.
+3. Генерирует `docker/caddy/Caddyfile`.
+4. Поднимает compose stack с autodetect `docker compose` / `docker-compose`.
+5. Ждёт API health.
+6. Применяет `alembic upgrade head`.
+7. Выполняет idempotent seed.
 
-Base compose (`docker-compose.yml`) + overlays:
-- `docker-compose.tls.yml`
-- `docker-compose.xray-public.yml`
-- `docker-compose.wg.yml`
-- `docker-compose.avg.yml`
-- `docker-compose.behind-ingress.yml`
+## Профили запуска
 
-Ручная правка compose-файлов на целевой машине **не требуется**.
+- `dev`: `APP_ENV=development`, `DEV_ROLE_EMULATION=true`, `SCHEMA_MANAGEMENT_MODE=bootstrap`.
+- `stage`: `APP_ENV=staging`, `DEV_ROLE_EMULATION=false`, `SCHEMA_MANAGEMENT_MODE=alembic`.
+- `prod-like`: `APP_ENV=production`, `DEV_ROLE_EMULATION=false`, `SCHEMA_MANAGEMENT_MODE=alembic`.
 
-## Основные scripts
+## TLS и coexistence с host Xray
+
+### Без домена / безопасный базовый сценарий (рекомендуется для VPS с занятым 443)
+
+```env
+DOMAIN=
+ENABLE_TLS_PROXY=false
+ENABLE_XRAY_PUBLIC=false
+```
+
+Запуск:
 
 ```bash
-./install.sh [safe|full|behind-ingress] [xray|wg|avg|mock]
-./scripts/doctor.sh [mode]
-./deploy.sh [safe|full|behind-ingress|dev|stage|prod-like]
+./deploy.sh prod-like
+```
+
+### С доменом и TLS для панели
+
+```env
+DOMAIN=panel.example.com
+ENABLE_TLS_PROXY=true
+```
+
+> Включайте только если 443 свободен для proxy/Caddy.
+
+### Публикация контейнерного Xray
+
+```env
+ENABLE_XRAY_PUBLIC=true
+XRAY_PUBLIC_PORT=8443
+```
+
+> Если на хосте уже есть боевой Xray, оставляйте `ENABLE_XRAY_PUBLIC=false`.
+
+## Caddy routing
+
+Настроено так:
+
+- `/api/events/stream*` -> API (с `flush_interval -1` для SSE);
+- `/api/*` и `/health` -> API;
+- всё остальное -> Web.
+
+Это гарантирует, что `/health` через proxy не попадает во frontend HTML.
+
+## Client Profiles API
+
+- `GET /api/links/{link_id}/profiles`
+- `GET /api/links/{link_id}/profiles/{profile_key}`
+
+В UI: `VLESS ссылки` -> кнопка `Profiles` -> открыть/скопировать/скачать payload.
+
+## Release-readiness static validation (без Docker)
+
+```bash
+./scripts/verify-release-readiness.sh
+```
+
+Скрипт проверяет:
+- shell syntax;
+- compose compatibility constraints (без `name:`, без `443` в base);
+- override-файлы;
+- Caddy routing правила (`/health`, `/api/*`, SSE);
+- синхронность `Caddyfile.template` и дефолтного `Caddyfile`.
+
+## Production handoff package
+
+- Release note: `docs/release-note-rc-144.31.99.55.md`
+- Runbook: `docs/vps-rollout-144.31.99.55.md`
+- Operator cheatsheet: `docs/operator-cheatsheet-144.31.99.55.md`
+
+## Ops scripts
+
+```bash
+./scripts/doctor.sh [dev|stage|prod-like]
+./scripts/verify-release-readiness.sh
 ./scripts/post-deploy-check.sh
 ./scripts/health-check.sh
+./scripts/logs.sh [service]
+./scripts/restart.sh
 ./scripts/backup.sh
 ./scripts/restore.sh <backup.tar.gz>
 ./scripts/update.sh
-./scripts/restart.sh
-./scripts/logs.sh [service]
 ```
 
-## Проверка после deploy
+## Smoke checks после deploy
 
 ```bash
-./scripts/post-deploy-check.sh
 curl -s http://127.0.0.1/health
 curl -s -H 'x-api-token: admin-token' http://127.0.0.1/api/auth/me
-curl -s -H 'x-api-token: admin-token' http://127.0.0.1/api/providers
+curl -s -H 'x-api-token: admin-token' http://127.0.0.1/api/links | head -c 300
 ```
 
-UI:
-- открыть панель
-- выполнить login
-- проверить Dashboard / Links / Profiles modal
+Если panel доступна по IP:
 
-## Совместимость Docker Compose
+```bash
+curl -s http://144.31.99.55/health
+curl -s -H 'x-api-token: admin-token' http://144.31.99.55/api/auth/me
+```
 
-Поддерживается:
-- `docker compose` (v2)
-- `docker-compose` (v1.29.2)
+## Post-deploy verification checklist
 
-## Ограничения v1
+- [ ] `docker compose ps` или `docker-compose ps`: `vpn_xray`, `vpn_api`, `vpn_web`, `vpn_proxy` в состоянии up/healthy.
+- [ ] `curl http://127.0.0.1/health` возвращает API JSON, а не frontend HTML.
+- [ ] `curl -H 'x-api-token: admin-token' http://127.0.0.1/api/auth/me` возвращает валидный principal.
+- [ ] `curl -H 'x-api-token: admin-token' http://127.0.0.1/api/links` отдаёт список ссылок.
+- [ ] UI доступен по `http://<server-ip>`.
+- [ ] В `VLESS ссылки` -> `Profiles` открывается modal, работают copy/download.
+- [ ] `./scripts/health-check.sh` проходит без ошибок.
+- [ ] `ss -ltnp | grep ':443'` подтверждает, что 443 остаётся за host Xray (в safe baseline режиме).
 
-- `wg` и `avg` реализованы staged/capability-aware (без полного parity с xray).
-- Без Docker runtime e2e проверки недоступны, используйте `doctor` + `verify-release-readiness` + `post-deploy-check`.
+## Локальная разработка
 
-## Документация ops
+```bash
+cd apps/api
+pip install -r requirements.txt
+PYTHONPATH=. alembic upgrade head
+pytest -q
 
-- `docs/vps-rollout-144.31.99.55.md`
-- `docs/release-note-rc-144.31.99.55.md`
-- `docs/operator-cheatsheet-144.31.99.55.md`
+cd ../web
+npm install
+npm run build
+```
+
+## Вне scope
+
+- Multi-backend VPN (WireGuard/OpenVPN)
+- Full auth lifecycle UI
+- Distributed/multi-node orchestration
+- Advanced alerts/export center

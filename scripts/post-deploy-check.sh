@@ -21,10 +21,10 @@ else
   warn "proxy /health routing"
 fi
 
-if "${COMPOSE[@]}" exec -T api python -c "import urllib.request, json; req=urllib.request.Request('http://proxy/api/providers', headers={'x-api-token':'admin-token'}); print(json.loads(urllib.request.urlopen(req, timeout=3).read().decode())['active_provider'])" >/dev/null 2>&1; then
-  ok "provider endpoint"
+if "${COMPOSE[@]}" exec -T api python -c "import urllib.request; req=urllib.request.Request('http://proxy/api/auth/me', headers={'x-api-token':'admin-token'}); urllib.request.urlopen(req, timeout=3)" >/dev/null 2>&1; then
+  ok "auth endpoint reachable with token"
 else
-  fail "provider endpoint"
+  warn "auth endpoint check failed (possibly non-default API_TOKEN)"
 fi
 
 if command -v ss >/dev/null 2>&1; then

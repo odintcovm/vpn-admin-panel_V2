@@ -5,8 +5,6 @@ export type DashboardOverview = {
   server_status: string
   chart_24h: { label: string; value: number }[]
   chart_7d: { label: string; value: number }[]
-  provider: string
-  provider_capabilities: Record<string, boolean>
 }
 
 export type Link = {
@@ -96,8 +94,6 @@ export type HealthFreshness = {
   server_status: string
   last_success_refresh_at: string
   data_freshness_sec: number
-  active_provider: string
-  provider_capabilities: Record<string, boolean>
 }
 
 export type NotificationItem = {
@@ -147,27 +143,3 @@ export type ServerStatus = {
 }
 
 export type Overview = DashboardOverview
-
-
-export type ProviderInfo = {
-  code: string
-  name: string
-  capabilities: Record<string, boolean>
-}
-
-export type ProviderCatalog = {
-  active_provider: string
-  providers: ProviderInfo[]
-  current_role: string
-}
-
-export type AuthLoginIn = {
-  username: string
-  password: string
-}
-
-export type AuthLoginOut = {
-  ok: boolean
-  role: string
-  user_id: number
-}
