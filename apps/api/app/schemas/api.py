@@ -45,6 +45,8 @@ class DashboardOverview(BaseModel):
     server_status: str
     chart_24h: list[dict[str, Any]]
     chart_7d: list[dict[str, Any]]
+    provider: str
+    provider_capabilities: dict[str, bool]
 
 
 class ClientOut(BaseModel):
@@ -139,6 +141,8 @@ class HealthFreshnessOut(BaseModel):
     server_status: str
     last_success_refresh_at: datetime
     data_freshness_sec: int
+    active_provider: str
+    provider_capabilities: dict[str, bool]
 
 
 class EventOut(BaseModel):
@@ -155,6 +159,31 @@ class ActionLogOut(BaseModel):
     status: str
     created_at: datetime
     meta: dict[str, Any]
+
+
+
+
+class ProviderInfoOut(BaseModel):
+    code: str
+    name: str
+    capabilities: dict[str, bool]
+
+
+class ProviderCatalogOut(BaseModel):
+    active_provider: str
+    providers: list[ProviderInfoOut]
+    current_role: str
+
+
+class AuthLoginIn(BaseModel):
+    username: str
+    password: str
+
+
+class AuthLoginOut(BaseModel):
+    ok: bool
+    role: str
+    user_id: int
 
 
 class AuthMeOut(BaseModel):

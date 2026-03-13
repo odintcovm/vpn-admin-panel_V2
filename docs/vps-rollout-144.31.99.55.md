@@ -1,108 +1,55 @@
-# VPS Rollout Runbook — 144.31.99.55
+# VPS rollout runbook (144.31.99.55)
 
-Цель: безопасно обновить панель, **не затрагивая host systemd Xray на 443**.
-
-## 0) Preconditions
+## 1) Update code
 
 ```bash
 cd /opt/vpn-admin-panel_V2
-```
-
-Проверь compose binary:
-
-```bash
-docker compose version || docker-compose version
-```
-
-Проверь, что host Xray жив:
-
-```bash
-systemctl status xray --no-pager
-ss -ltnp | grep ':443'
-```
-
-## 1) Backup before update
-
-```bash
-./scripts/backup.sh
-ls -lah backups/
-```
-
-## 2) Update source
-
-```bash
-git fetch --all
-git checkout codex/build-mvp-for-xray/vless-admin-panel-aj6luj
+git fetch --all --tags --prune
+git checkout codex/server-baseline-20260313
 git pull --ff-only
 ```
 
-## 3) Safe prod-like env for this VPS
+## 2) Safe install/deploy (host Xray on 443 must stay untouched)
 
 ```bash
-cp -n .env.example .env
-sed -i 's/^APP_ENV=.*/APP_ENV=production/' .env
-sed -i 's/^DEV_ROLE_EMULATION=.*/DEV_ROLE_EMULATION=false/' .env
-sed -i 's/^SCHEMA_MANAGEMENT_MODE=.*/SCHEMA_MANAGEMENT_MODE=alembic/' .env
-
-# keep host dataplane untouched
-sed -i 's/^ENABLE_TLS_PROXY=.*/ENABLE_TLS_PROXY=false/' .env
-sed -i 's/^ENABLE_XRAY_PUBLIC=.*/ENABLE_XRAY_PUBLIC=false/' .env
-sed -i 's/^DOMAIN=.*/DOMAIN=/' .env
+./install.sh safe xray
 ```
 
-## 4) Deploy
+## 3) Explicit env baseline (optional hard pin)
 
 ```bash
-./deploy.sh prod-like
+grep -E '^(DEPLOY_MODE|APP_PROVIDER|ENABLE_TLS_PROXY|ENABLE_XRAY_PUBLIC|DOMAIN|AUTH_ENABLED)=' .env
+# expected:
+# DEPLOY_MODE=safe
+# APP_PROVIDER=xray
+# ENABLE_TLS_PROXY=false
+# ENABLE_XRAY_PUBLIC=false
+# DOMAIN=
+# AUTH_ENABLED=true
 ```
 
-## 5) Post-deploy smoke
+## 4) Post-deploy checks
 
 ```bash
+./scripts/post-deploy-check.sh
 ./scripts/health-check.sh
 curl -s http://127.0.0.1/health
 curl -s -H 'x-api-token: admin-token' http://127.0.0.1/api/auth/me
-curl -s -H 'x-api-token: admin-token' http://127.0.0.1/api/links | head -c 300
-```
-
-UI checks:
-- открыть `http://144.31.99.55`
-- открыть `VLESS ссылки` -> `Profiles`
-- проверить copy/download payload
-
-## 6) Verify host Xray still owns 443
-
-```bash
+curl -s -H 'x-api-token: admin-token' http://127.0.0.1/api/providers
 ss -ltnp | grep ':443'
-systemctl status xray --no-pager
 ```
 
-Ожидание: 443 остаётся за host Xray/service unit, не за proxy контейнером панели.
+## 5) UI checks
 
-## 7) Fast rollback
+1. Open `http://144.31.99.55`
+2. Login with admin credentials from `.env`
+3. Open `VLESS ссылки` -> `Profiles`
+4. Validate copy/download
 
-Вариант A — rollback DB/config/env из backup:
+## 6) Rollback
 
 ```bash
-./scripts/restore.sh backups/<backup_file>.tar.gz
-./scripts/health-check.sh
+./scripts/backup.sh
+./scripts/restore.sh backups/<file>.tar.gz
+./scripts/post-deploy-check.sh
 ```
-
-Вариант B — откат к предыдущему git-коммиту + redeploy:
-
-```bash
-git log --oneline -n 5
-git checkout <previous_commit>
-./deploy.sh prod-like
-./scripts/health-check.sh
-```
-
-## 8) Optional TLS mode (only if 443 is intentionally free)
-
-```bash
-sed -i 's/^DOMAIN=.*/DOMAIN=panel.example.com/' .env
-sed -i 's/^ENABLE_TLS_PROXY=.*/ENABLE_TLS_PROXY=true/' .env
-./deploy.sh prod-like
-```
-
-> Не включать на данном VPS, если host Xray уже использует 443.

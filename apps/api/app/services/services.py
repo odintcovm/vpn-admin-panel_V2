@@ -23,11 +23,11 @@ from app.models.entities import (
     TrafficSnapshot,
     UserLink,
 )
-from app.providers.base import MockXrayAdapter, XrayAdapter, XrayProviderAdapter
+from app.providers.base import AvgProviderAdapter, MockXrayAdapter, ProviderAdapter, WireGuardProviderAdapter, XrayProviderAdapter
 
 
 class StatsService:
-    def __init__(self, db: Session, adapter: XrayAdapter):
+    def __init__(self, db: Session, adapter: ProviderAdapter):
         self.db = db
         self.adapter = adapter
 
@@ -44,6 +44,7 @@ class StatsService:
             {"label": t.timestamp.strftime("%a"), "value": t.traffic_gb}
             for t in self.db.query(TrafficSnapshot).filter(TrafficSnapshot.period == "7d").order_by(TrafficSnapshot.timestamp.asc()).all()
         ]
+        provider_stats = self.adapter.get_stats()
         return {
             "total_links": total_links,
             "active_connections": active_connections,
@@ -51,6 +52,8 @@ class StatsService:
             "server_status": server.service_status if server else "unknown",
             "chart_24h": chart_24h,
             "chart_7d": chart_7d,
+            "provider": provider_stats.get("provider", "mock"),
+            "provider_capabilities": provider_stats.get("capabilities", {}),
         }
 
 
@@ -149,7 +152,7 @@ class ClientService:
 
 
 class LogService:
-    def __init__(self, adapter: XrayAdapter):
+    def __init__(self, adapter: ProviderAdapter):
         self.adapter = adapter
 
     def logs(self) -> list[str]:
@@ -157,9 +160,31 @@ class LogService:
 
 
 class ProviderFactory:
-    @staticmethod
-    def get(provider_name: str) -> XrayAdapter:
-        return XrayProviderAdapter() if provider_name == "xray" else MockXrayAdapter()
+    _registry = {
+        "xray": XrayProviderAdapter,
+        "wg": WireGuardProviderAdapter,
+        "avg": AvgProviderAdapter,
+        "mock": MockXrayAdapter,
+    }
+
+    @classmethod
+    def get(cls, provider_name: str) -> ProviderAdapter:
+        adapter_cls = cls._registry.get(provider_name, MockXrayAdapter)
+        return adapter_cls()
+
+    @classmethod
+    def list_providers(cls) -> list[dict]:
+        items = []
+        for key, adapter_cls in cls._registry.items():
+            adapter = adapter_cls()
+            items.append(
+                {
+                    "code": key,
+                    "name": adapter.display_name,
+                    "capabilities": adapter.capabilities,
+                }
+            )
+        return items
 
 
 def list_notifications(db: Session, principal_id: str, unread_only: bool = False, limit: int = 100, offset: int = 0) -> list[dict]:
@@ -283,28 +308,46 @@ def _profile_connection_target(db: Session) -> tuple[str, int, str]:
     security = "tls" if port == 443 else "none"
     return host, port, security
 
-def get_link_profiles(db: Session, link_id: int) -> dict | None:
+
+def get_provider_capabilities(provider_name: str) -> dict[str, bool]:
+    adapter = ProviderFactory.get(provider_name)
+    return adapter.capabilities
+
+def get_link_profiles(db: Session, link_id: int, provider_name: str = "xray") -> dict | None:
     link = db.query(UserLink).filter(UserLink.id == link_id).first()
     if not link:
         return None
+
+    caps = get_provider_capabilities(provider_name)
+    profile_available = caps.get("profiles", False)
 
     return {
         "link_id": link.id,
         "link_name": link.name,
         "formats": [
-            {"key": "vless_uri", "title": "VLESS URI", "available": True, "description": "Универсальный URI для большинства Xray/VLESS клиентов"},
-            {"key": "qr_payload", "title": "QR Payload", "available": True, "description": "Строка для генерации QR-кода"},
-            {"key": "v2rayn_json", "title": "v2rayN JSON", "available": True, "description": "Импортируемый JSON профиль для v2rayN/v2rayNG"},
-            {"key": "singbox_json", "title": "sing-box JSON", "available": True, "description": "Минимальный outbound профиль для совместимых клиентов"},
-            {"key": "hiddify_guide", "title": "Hiddify Guide", "available": True, "description": "Человекочитаемая инструкция подключения"},
+            {"key": "vless_uri", "title": "VLESS URI", "available": profile_available, "description": "Универсальный URI для большинства Xray/VLESS клиентов"},
+            {"key": "qr_payload", "title": "QR Payload", "available": profile_available, "description": "Строка для генерации QR-кода"},
+            {"key": "v2rayn_json", "title": "v2rayN JSON", "available": profile_available, "description": "Импортируемый JSON профиль для v2rayN/v2rayNG"},
+            {"key": "singbox_json", "title": "sing-box JSON", "available": profile_available, "description": "Минимальный outbound профиль для совместимых клиентов"},
+            {"key": "hiddify_guide", "title": "Hiddify Guide", "available": profile_available, "description": "Человекочитаемая инструкция подключения"},
         ],
     }
 
 
-def get_link_profile_payload(db: Session, link_id: int, profile_key: str) -> dict | None:
+def get_link_profile_payload(db: Session, link_id: int, profile_key: str, provider_name: str = "xray") -> dict | None:
     link = db.query(UserLink).filter(UserLink.id == link_id).first()
     if not link:
         return None
+
+    if not get_provider_capabilities(provider_name).get("profiles", False):
+        return {
+            "key": profile_key,
+            "title": "Provider specific",
+            "content_type": "text/plain",
+            "filename": None,
+            "payload": "Формат профиля недоступен для текущего provider.",
+            "instruction": "Переключите provider на xray для экспорта VLESS-профилей.",
+        }
 
     host, port, security = _profile_connection_target(db)
     uri = f"vless://{link.uuid}@{host}:{port}?security={security}&type=tcp#{link.name}"

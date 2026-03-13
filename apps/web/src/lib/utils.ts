@@ -6,7 +6,7 @@ export function cn(...inputs: Array<string | false | null | undefined>) {
 }
 
 export const apiBase = import.meta.env.VITE_API_URL ?? ''
-export const apiToken = import.meta.env.VITE_API_TOKEN ?? 'admin-token'
+export const apiToken = import.meta.env.VITE_API_TOKEN ?? ''
 
 export type ApiError = {
   status: number
@@ -35,13 +35,16 @@ export async function parseApiError(res: Response): Promise<ApiError> {
 
 export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const headers = new Headers(init?.headers)
-  headers.set('x-api-token', apiToken)
+  if (apiToken) {
+    headers.set('x-api-token', apiToken)
+  }
   if (init?.body) {
     headers.set('Content-Type', 'application/json')
   }
 
   const res = await fetch(`${apiBase}${path}`, {
     ...init,
+    credentials: 'include',
     headers
   })
 

@@ -3,18 +3,27 @@ import json
 import time
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, Header
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
-from app.core.security import SecurityPrincipal, get_current_principal, require_permission
+from app.core.security import (
+    SecurityPrincipal,
+    authenticate_admin,
+    get_current_principal,
+    get_optional_principal,
+    require_permission,
+    revoke_session,
+)
 from app.db.database import get_db
 from app.models.entities import AdminActionLog, ClientSession, ServerStatus, SessionRecord, SystemEvent, UserLink
 from app.schemas.api import (
     ActionExecuteIn,
     ActionExecuteOut,
     ActionLogOut,
+    AuthLoginIn,
+    AuthLoginOut,
     AuthMeOut,
     ClientOut,
     ClientProfilePayloadOut,
@@ -30,6 +39,7 @@ from app.schemas.api import (
     SessionDrilldownOut,
     SessionOut,
     TimelineEventOut,
+    ProviderCatalogOut,
 )
 from app.services import services
 from app.services.services import ClientService, LinkService, LogService, ProviderFactory, StatsService
@@ -58,6 +68,59 @@ def auth_me(principal: SecurityPrincipal = Depends(get_current_principal)):
     )
 
 
+
+
+@router.post("/auth/login", response_model=AuthLoginOut)
+def auth_login(
+    payload: AuthLoginIn,
+    response: Response,
+    db: Session = Depends(get_db),
+):
+    settings = get_settings()
+    login = authenticate_admin(db, payload.username, payload.password, settings)
+    response.set_cookie(
+        key=settings.auth_cookie_name,
+        value=login.session_subject,
+        httponly=True,
+        secure=settings.auth_cookie_secure,
+        samesite="lax",
+        max_age=max(3600, settings.auth_session_ttl_hours * 3600),
+        path="/",
+    )
+    return AuthLoginOut(ok=True, role=login.role, user_id=login.user_id)
+
+
+@router.post("/auth/logout")
+def auth_logout(
+    response: Response,
+    cookie_header: str | None = Header(default=None, alias="cookie"),
+    db: Session = Depends(get_db),
+):
+    settings = get_settings()
+    session_cookie = None
+    if cookie_header:
+        for part in cookie_header.split(";"):
+            part = part.strip()
+            if part.startswith(f"{settings.auth_cookie_name}="):
+                session_cookie = part.split("=", 1)[1]
+                break
+    revoke_session(db, session_cookie)
+    response.delete_cookie(settings.auth_cookie_name, path="/")
+    return {"ok": True}
+
+
+@router.get("/providers", response_model=ProviderCatalogOut)
+def list_providers(
+    principal: SecurityPrincipal = Depends(require_permission("dashboard.read")),
+):
+    settings = get_settings()
+    return ProviderCatalogOut(
+        active_provider=settings.app_provider,
+        providers=ProviderFactory.list_providers(),
+        current_role=principal.role,
+    )
+
+
 @router.get("/system/health", response_model=HealthFreshnessOut)
 def system_health(
     db: Session = Depends(get_db),
@@ -67,12 +130,16 @@ def system_health(
     action = db.query(AdminActionLog).order_by(AdminActionLog.created_at.desc()).first()
     last_refresh = action.created_at if action else datetime.utcnow()
     freshness = int((datetime.utcnow() - last_refresh).total_seconds())
+    adapter = ProviderFactory.get(get_settings().app_provider)
+    provider_stats = adapter.get_stats()
     return HealthFreshnessOut(
         provider_status="healthy" if freshness < 120 else "degraded",
         backend_status="ok" if status_row else "degraded",
         server_status=status_row.service_status if status_row else "unknown",
         last_success_refresh_at=last_refresh,
         data_freshness_sec=freshness,
+        active_provider=get_settings().app_provider,
+        provider_capabilities=provider_stats.get("capabilities", {}),
     )
 
 
@@ -208,7 +275,7 @@ def get_qr(link_id: int, db: Session = Depends(get_db), _: SecurityPrincipal = D
 
 @router.get("/links/{link_id}/profiles", response_model=ClientProfilesOut)
 def link_profiles(link_id: int, db: Session = Depends(get_db), _: SecurityPrincipal = Depends(require_permission("links.read"))):
-    data = services.get_link_profiles(db, link_id)
+    data = services.get_link_profiles(db, link_id, get_settings().app_provider)
     if not data:
         _not_found("LINK_NOT_FOUND", "Link not found")
     return data
@@ -216,7 +283,7 @@ def link_profiles(link_id: int, db: Session = Depends(get_db), _: SecurityPrinci
 
 @router.get("/links/{link_id}/profiles/{profile_key}", response_model=ClientProfilePayloadOut)
 def link_profile_payload(link_id: int, profile_key: str, db: Session = Depends(get_db), _: SecurityPrincipal = Depends(require_permission("links.read"))):
-    data = services.get_link_profile_payload(db, link_id, profile_key)
+    data = services.get_link_profile_payload(db, link_id, profile_key, get_settings().app_provider)
     if not data:
         raise HTTPException(status_code=404, detail={"error": {"code": "PROFILE_NOT_FOUND", "message": "Profile format not found or link missing"}})
     return data
@@ -315,6 +382,8 @@ def server_status(db: Session = Depends(get_db), _: SecurityPrincipal = Depends(
     row = db.query(ServerStatus).first()
     if not row:
         _not_found("SERVER_STATUS_NOT_FOUND", "status not found")
+    config_summary = json.loads(row.config_summary)
+    config_summary.setdefault("provider", get_settings().app_provider)
     return {
         "service_status": row.service_status,
         "xray_version": row.xray_version,
@@ -322,7 +391,7 @@ def server_status(db: Session = Depends(get_db), _: SecurityPrincipal = Depends(
         "hostname": row.hostname,
         "domain": row.domain,
         "port": row.port,
-        "config_summary": json.loads(row.config_summary),
+        "config_summary": config_summary,
     }
 
 
@@ -392,7 +461,14 @@ def read_all_notifications(
 
 
 @router.get("/events/stream")
-def event_stream():
+def event_stream(
+    token: str | None = Query(default=None),
+    principal: SecurityPrincipal | None = Depends(get_optional_principal),
+):
+    settings = get_settings()
+    if not principal and token != settings.api_token:
+        raise HTTPException(status_code=401, detail={"error": {"code": "AUTH_REQUIRED", "message": "Auth is required"}})
+
     def generate():
         notifications = itertools.cycle(
             [

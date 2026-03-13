@@ -15,7 +15,10 @@ import type {
   ServerStatus,
   SessionDrilldown,
   SessionItem,
-  TimelineEvent
+  TimelineEvent,
+  ProviderCatalog,
+  AuthMe,
+  AuthLoginIn
 } from './types/api'
 
 type TabKey = 'dashboard' | 'links' | 'clients' | 'sessions' | 'settings'
@@ -84,12 +87,30 @@ export function App() {
   const [sessionDrilldownLoading, setSessionDrilldownLoading] = useState(false)
 
   const [savedViews, setSavedViews] = useState<SavedView[]>(() => loadViews(tab))
+  const [authChecked, setAuthChecked] = useState(false)
+  const [authenticated, setAuthenticated] = useState(false)
+  const [authError, setAuthError] = useState<string | null>(null)
+  const [providerCatalog, setProviderCatalog] = useState<ProviderCatalog | null>(null)
+
+  async function checkAuth() {
+    try {
+      await apiFetch<AuthMe>('/api/auth/me')
+      setAuthenticated(true)
+      setAuthError(null)
+      return true
+    } catch {
+      setAuthenticated(false)
+      return false
+    } finally {
+      setAuthChecked(true)
+    }
+  }
 
   async function load() {
     setLoading(true)
     setError(null)
     try {
-      const [ov, ls, cs, ss, sv, ev, lg, nt, hl] = await Promise.all([
+      const [ov, ls, cs, ss, sv, ev, lg, nt, hl, pc] = await Promise.all([
         apiFetch<Overview>('/api/dashboard/overview'),
         apiFetch<Link[]>('/api/links'),
         apiFetch<Client[]>('/api/clients'),
@@ -98,9 +119,10 @@ export function App() {
         apiFetch<EventItem[]>('/api/events'),
         apiFetch<LogItem[]>('/api/activity-log'),
         apiFetch<NotificationItem[]>('/api/notifications'),
-        apiFetch<HealthFreshness>('/api/system/health')
+        apiFetch<HealthFreshness>('/api/system/health'),
+        apiFetch<ProviderCatalog>('/api/providers')
       ])
-      setOverview(ov); setLinks(ls); setClients(cs); setSessions(ss); setServer(sv); setEvents(ev); setLogs(lg); setNotifications(nt); setHealth(hl)
+      setOverview(ov); setLinks(ls); setClients(cs); setSessions(ss); setServer(sv); setEvents(ev); setLogs(lg); setNotifications(nt); setHealth(hl); setProviderCatalog(pc)
       setLastRefreshAt(new Date().toISOString())
     } catch (e) {
       setError((e as Error).message)
@@ -114,9 +136,14 @@ export function App() {
   }, [tab])
 
   useEffect(() => {
-    load()
+    checkAuth().then((ok) => { if (ok) { void load() } })
+  }, [])
+
+  useEffect(() => {
+    if (!authenticated) return
     const base = import.meta.env.VITE_API_URL ?? ''
-    const src = new EventSource(`${base}/api/events/stream?token=${apiToken}`)
+    const sseUrl = apiToken ? `${base}/api/events/stream?token=${apiToken}` : `${base}/api/events/stream`
+    const src = new EventSource(sseUrl, { withCredentials: true })
     src.onopen = () => setSseState('connected')
     src.onmessage = (event) => {
       if (!pushEnabled) return
@@ -146,7 +173,7 @@ export function App() {
       src.close()
     }
     return () => src.close()
-  }, [pushEnabled])
+  }, [pushEnabled, authenticated])
 
   useEffect(() => { if (!notice) return; const t = setTimeout(() => setNotice(null), 2500); return () => clearTimeout(t) }, [notice])
   useEffect(() => { if (!pushNotices.length) return; const t = setTimeout(() => setPushNotices((prev) => prev.slice(0, -1)), 6000); return () => clearTimeout(t) }, [pushNotices])
@@ -203,11 +230,35 @@ export function App() {
     }
   }
 
+  async function login(payload: AuthLoginIn) {
+    try {
+      await apiFetch('/api/auth/login', { method: 'POST', body: JSON.stringify(payload) })
+      setAuthenticated(true)
+      setAuthError(null)
+      await load()
+    } catch (e) {
+      setAuthError((e as Error).message)
+    }
+  }
+
+  async function logout() {
+    await apiFetch('/api/auth/logout', { method: 'POST' })
+    setAuthenticated(false)
+  }
+
   function addSavedView(view: SavedView) {
     const updated = [view, ...savedViews]
     setSavedViews(updated)
     saveViews(tab, updated)
     setNotice('Представление сохранено')
+  }
+
+  if (!authChecked) {
+    return <div className="min-h-screen bg-bg p-6"><LoadingState text="Проверка авторизации..." /></div>
+  }
+
+  if (!authenticated) {
+    return <LoginScreen onLogin={login} error={authError} />
   }
 
   return (
@@ -222,7 +273,7 @@ export function App() {
           </div>
           <div className="grid gap-2 rounded-xl border border-border bg-bg p-3 md:grid-cols-5">
             <div className="md:col-span-2"><span className="text-xs text-muted">Health/Freshness</span><p className="text-sm"><Badge tone={freshnessState.tone}>{freshnessState.text}</Badge></p></div>
-            <div><span className="text-xs text-muted">Xray/Provider</span><p className="text-sm">{health?.server_status ?? 'unknown'} / {health?.provider_status ?? 'unknown'}</p></div>
+            <div><span className="text-xs text-muted">Xray/Provider</span><p className="text-sm">{providerCatalog?.active_provider ?? health?.active_provider ?? 'unknown'} / {health?.provider_status ?? 'unknown'}</p></div>
             <div><span className="text-xs text-muted">SSE</span><p className="text-sm"><Badge tone={sseState === 'connected' ? 'success' : 'danger'}>{sseState === 'connected' ? 'connected' : 'disconnected'}</Badge></p></div>
             <div><span className="text-xs text-muted">Последнее обновление</span><p className="text-sm">{formatDate(lastRefreshAt)}</p></div>
           </div>
@@ -230,7 +281,7 @@ export function App() {
             <Button variant="ghost" onClick={() => setPushEnabled((v)=>!v)}>{pushEnabled ? 'Push: Вкл':'Push: Выкл'}</Button>
             <Button variant="secondary" onClick={() => setOpenNotifications(true)}>Уведомления ({notifications.filter(n=>!n.is_read).length})</Button>
             <Button variant="secondary" onClick={() => openActionCenter({ action: 'reload', target_type: 'server' })}>Центр действий: Reload</Button>
-            <Button variant="danger" onClick={() => openActionCenter({ action: 'restart', target_type: 'server' })}>Центр действий: Restart</Button>
+            <Button variant="danger" onClick={() => openActionCenter({ action: 'restart', target_type: 'server' })}>Центр действий: Restart</Button><Button variant="ghost" onClick={() => { void logout() }}>Выход</Button>
           </div>
         </header>
 
@@ -378,6 +429,15 @@ function ClientProfilesModal({ open, onOpenChange, link }: { open: boolean; onOp
       a.click()
       URL.revokeObjectURL(a.href)
     }}>Скачать</Button></div></div><pre className="max-h-64 overflow-auto rounded-xl border border-border bg-bg p-3 text-xs text-slate-200">{payload.payload}</pre></Card>}</div></Modal>
+}
+
+
+function LoginScreen({ onLogin, error }: { onLogin: (payload: AuthLoginIn) => Promise<void>; error: string | null }) {
+  const [username, setUsername] = useState('admin')
+  const [password, setPassword] = useState('')
+  const [loading, setLoading] = useState(false)
+
+  return <div className="min-h-screen bg-bg p-4 font-['Inter'] text-slate-100 md:p-6"><div className="mx-auto mt-20 max-w-md"><Card><SectionTitle title="Вход в панель" subtitle="Требуется авторизация администратора" /><div className="mt-3 space-y-2"><Input placeholder="Логин" value={username} onChange={(e)=>setUsername(e.target.value)} /><Input placeholder="Пароль" type="password" value={password} onChange={(e)=>setPassword(e.target.value)} />{error && <InlineNotice tone="danger" text={error} />}<Button disabled={loading || !username || !password} onClick={async()=>{ setLoading(true); await onLogin({ username, password }); setLoading(false) }}>{loading ? 'Вход...' : 'Войти'}</Button></div></Card></div></div>
 }
 
 function CreateLinkModal({ open, onOpenChange, onDone }: { open: boolean; onOpenChange: (v: boolean) => void; onDone: () => void }) {

@@ -258,3 +258,41 @@ def test_link_profiles_endpoints():
         assert vless.status_code == 200
         assert 'vless://' in vless.json()['payload']
 
+
+def test_auth_login_and_cookie_session(monkeypatch):
+    monkeypatch.setenv("AUTH_ENABLED", "true")
+    monkeypatch.setenv("ADMIN_USERNAME", "admin")
+    monkeypatch.setenv("ADMIN_PASSWORD", "admin123")
+    _reset_settings_cache()
+
+    with TestClient(app) as client:
+        no_auth = client.get('/api/auth/me')
+        assert no_auth.status_code == 401
+
+        login = client.post('/api/auth/login', json={'username': 'admin', 'password': 'admin123'})
+        assert login.status_code == 200
+
+        me = client.get('/api/auth/me')
+        assert me.status_code == 200
+        assert me.json()['auth_mode'] == 'session'
+
+        logout = client.post('/api/auth/logout')
+        assert logout.status_code == 200
+
+        me_after = client.get('/api/auth/me')
+        assert me_after.status_code == 401
+
+
+def test_providers_catalog_and_health_has_provider():
+    with TestClient(app) as client:
+        providers = client.get('/api/providers', headers=BASE_HEADERS)
+        assert providers.status_code == 200
+        payload = providers.json()
+        assert payload['active_provider'] in {'xray', 'wg', 'avg', 'mock'}
+        codes = {item['code'] for item in payload['providers']}
+        assert {'xray', 'wg', 'avg', 'mock'}.issubset(codes)
+
+        health = client.get('/api/system/health', headers=BASE_HEADERS)
+        assert health.status_code == 200
+        assert 'active_provider' in health.json()
+        assert 'provider_capabilities' in health.json()

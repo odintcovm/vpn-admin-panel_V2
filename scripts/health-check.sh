@@ -17,6 +17,10 @@ if ! "${COMPOSE[@]}" exec -T api python -c "import urllib.request; req=urllib.re
   log_warn "Proxy /api/auth/me route check failed"
 fi
 
+if ! "${COMPOSE[@]}" exec -T api python -c "import urllib.request; req=urllib.request.Request('http://proxy/api/providers', headers={'x-api-token':'admin-token'}); urllib.request.urlopen(req, timeout=3)" >/dev/null; then
+  log_warn "Proxy /api/providers route check failed"
+fi
+
 if ss -ltn '( sport = :443 )' | grep -q ':443'; then
   log_info "Port 443 is in use on host (expected when host Xray owns dataplane)."
 else
