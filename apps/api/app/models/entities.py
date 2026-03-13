@@ -68,7 +68,6 @@ class UserLink(Base):
     uuid: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
     note: Mapped[str] = mapped_column(String(255), default="")
     tag: Mapped[str] = mapped_column(String(120), default="")
-    provider: Mapped[str] = mapped_column(String(16), nullable=False, default="xray")
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     total_traffic_gb: Mapped[float] = mapped_column(Float, default=0)
     traffic_limit_gb: Mapped[float | None] = mapped_column(Float, nullable=True)

@@ -26,17 +26,6 @@ from app.models.entities import (
 from app.providers.base import MockXrayAdapter, XrayAdapter, XrayProviderAdapter
 
 
-PROVIDER_PROFILE_FORMATS = {
-    "xray": ["vless_uri", "qr_payload", "v2rayn_json", "singbox_json", "hiddify_guide"],
-    "avg": ["awg_conf"],
-    "wg": ["wg_conf"],
-}
-
-
-def profile_formats_for_provider(provider: str) -> list[str]:
-    return PROVIDER_PROFILE_FORMATS.get(provider, PROVIDER_PROFILE_FORMATS["xray"])
-
-
 class StatsService:
     def __init__(self, db: Session, adapter: XrayAdapter):
         self.db = db
@@ -81,8 +70,6 @@ class LinkService:
                     "uuid": link.uuid,
                     "note": link.note,
                     "tag": link.tag,
-                    "provider": link.provider,
-                    "profile_formats": profile_formats_for_provider(link.provider),
                     "status": status,
                     "enabled": link.enabled,
                     "last_ip": link.last_ip,
@@ -96,7 +83,6 @@ class LinkService:
         return items
 
     def create(self, payload: dict):
-        payload = {**payload, "provider": payload.get("provider", "xray")}
         link = UserLink(uuid=str(uuid.uuid4()), **payload)
         self.db.add(link)
         self.db.flush()
@@ -302,24 +288,15 @@ def get_link_profiles(db: Session, link_id: int) -> dict | None:
     if not link:
         return None
 
-    provider = link.provider or "xray"
-    format_catalog = {
-        "vless_uri": {"title": "VLESS URI", "description": "Универсальный URI для большинства Xray/VLESS клиентов"},
-        "qr_payload": {"title": "QR Payload", "description": "Строка для генерации QR-кода"},
-        "v2rayn_json": {"title": "v2rayN JSON", "description": "Импортируемый JSON профиль для v2rayN/v2rayNG"},
-        "singbox_json": {"title": "sing-box JSON", "description": "Минимальный outbound профиль для совместимых клиентов"},
-        "hiddify_guide": {"title": "Hiddify Guide", "description": "Человекочитаемая инструкция подключения"},
-        "awg_conf": {"title": "AmneziaWG config", "description": "Конфигурация AmneziaWG (*.conf)"},
-        "wg_conf": {"title": "WireGuard config", "description": "Конфигурация WireGuard (*.conf)"},
-    }
-    keys = profile_formats_for_provider(provider)
-
     return {
         "link_id": link.id,
         "link_name": link.name,
         "formats": [
-            {"key": key, "title": format_catalog[key]["title"], "available": True, "description": format_catalog[key]["description"]}
-            for key in keys
+            {"key": "vless_uri", "title": "VLESS URI", "available": True, "description": "Универсальный URI для большинства Xray/VLESS клиентов"},
+            {"key": "qr_payload", "title": "QR Payload", "available": True, "description": "Строка для генерации QR-кода"},
+            {"key": "v2rayn_json", "title": "v2rayN JSON", "available": True, "description": "Импортируемый JSON профиль для v2rayN/v2rayNG"},
+            {"key": "singbox_json", "title": "sing-box JSON", "available": True, "description": "Минимальный outbound профиль для совместимых клиентов"},
+            {"key": "hiddify_guide", "title": "Hiddify Guide", "available": True, "description": "Человекочитаемая инструкция подключения"},
         ],
     }
 
@@ -330,54 +307,7 @@ def get_link_profile_payload(db: Session, link_id: int, profile_key: str) -> dic
         return None
 
     host, port, security = _profile_connection_target(db)
-    provider = link.provider or "xray"
     uri = f"vless://{link.uuid}@{host}:{port}?security={security}&type=tcp#{link.name}"
-
-    if provider == "avg" and profile_key == "awg_conf":
-        payload = f"""[Interface]
-PrivateKey = REPLACE_WITH_PRIVATE_KEY
-Address = 10.8.0.{(link.id % 200) + 2}/32
-DNS = 1.1.1.1
-
-[Peer]
-PublicKey = REPLACE_WITH_SERVER_PUBLIC_KEY
-PresharedKey = REPLACE_WITH_PRESHARED_KEY
-Endpoint = {host}:{port}
-AllowedIPs = 0.0.0.0/0, ::/0
-PersistentKeepalive = 25
-"""
-        return {
-            "key": "awg_conf",
-            "title": "AmneziaWG config",
-            "content_type": "text/plain",
-            "filename": f"{link.name}-amneziawg.conf",
-            "payload": payload,
-            "instruction": "Импортируйте .conf в AmneziaWG и замените placeholder-ключи реальными значениями.",
-        }
-
-    if provider == "wg" and profile_key == "wg_conf":
-        payload = f"""[Interface]
-PrivateKey = REPLACE_WITH_PRIVATE_KEY
-Address = 10.9.0.{(link.id % 200) + 2}/32
-DNS = 1.1.1.1
-
-[Peer]
-PublicKey = REPLACE_WITH_SERVER_PUBLIC_KEY
-Endpoint = {host}:{port}
-AllowedIPs = 0.0.0.0/0, ::/0
-PersistentKeepalive = 25
-"""
-        return {
-            "key": "wg_conf",
-            "title": "WireGuard config",
-            "content_type": "text/plain",
-            "filename": f"{link.name}-wireguard.conf",
-            "payload": payload,
-            "instruction": "Импортируйте .conf в WireGuard и замените placeholder-ключи реальными значениями.",
-        }
-
-    if provider in {"avg", "wg"}:
-        return None
 
     if profile_key == "vless_uri":
         return {
@@ -491,7 +421,6 @@ def seed_if_empty(db: Session):
                 uuid=str(uuid.uuid4()),
                 note="Основное устройство" if i < 3 else "Резерв",
                 tag=tags[i],
-                provider="xray",
                 enabled=False if i == 4 else True,
                 total_traffic_gb=round(15 + i * 8.2, 2),
                 traffic_limit_gb=80 if i in (0, 1, 2) else 40,

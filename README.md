@@ -2,12 +2,6 @@
 
 Панель управления **одним Xray/VLESS сервером**: FastAPI API, React web, Xray runtime, Caddy reverse proxy, Alembic migration-first.
 
-## Поддерживаемый target baseline
-
-- Debian 12
-- single-node VM
-- минимум 1 vCPU / 2GB RAM / 32GB disk
-
 ## Что включено
 
 - Backend: FastAPI + SQLAlchemy + Pydantic + SQLite.
@@ -42,14 +36,6 @@ Base stack (`docker-compose.yml`) безопасен для VPS, где:
 
 - `docker-compose.tls.yml` — включает публикацию `443:443` для proxy;
 - `docker-compose.xray-public.yml` — включает публикацию `${XRAY_PUBLIC_PORT}:8443` для контейнерного Xray.
-
-## Рекомендуемый bootstrap/deploy
-
-```bash
-git clone <repo>
-cd vpn-admin-panel_V2
-./install.sh prod-like
-```
 
 ## One-command deploy
 
@@ -133,12 +119,7 @@ XRAY_PUBLIC_PORT=8443
 - `GET /api/links/{link_id}/profiles`
 - `GET /api/links/{link_id}/profiles/{profile_key}`
 
-Provider-aware форматы:
-- `xray`: `vless_uri`, `qr_payload`, `v2rayn_json`, `singbox_json`, `hiddify_guide`
-- `avg`: `awg_conf`
-- `wg`: `wg_conf`
-
-В UI: `VLESS ссылки` -> `Создать пользователя` (выбор протокола) -> `Profiles`.
+В UI: `VLESS ссылки` -> кнопка `Profiles` -> открыть/скопировать/скачать payload.
 
 ## Release-readiness static validation (без Docker)
 

@@ -13,8 +13,6 @@ export type Link = {
   uuid: string
   note: string
   tag: string
-  provider: "xray" | "avg" | "wg"
-  profile_formats: string[]
   status: string
   enabled: boolean
   last_ip: string | null

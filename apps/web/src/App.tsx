@@ -228,7 +228,7 @@ export function App() {
           </div>
           <div className="flex flex-wrap gap-2">
             <Button variant="ghost" onClick={() => setPushEnabled((v)=>!v)}>{pushEnabled ? 'Push: Вкл':'Push: Выкл'}</Button>
-            <Button variant="secondary" onClick={() => setOpenCreate(true)}>Создать пользователя</Button><Button variant="secondary" onClick={() => setOpenNotifications(true)}>Уведомления ({notifications.filter(n=>!n.is_read).length})</Button>
+            <Button variant="secondary" onClick={() => setOpenNotifications(true)}>Уведомления ({notifications.filter(n=>!n.is_read).length})</Button>
             <Button variant="secondary" onClick={() => openActionCenter({ action: 'reload', target_type: 'server' })}>Центр действий: Reload</Button>
             <Button variant="danger" onClick={() => openActionCenter({ action: 'restart', target_type: 'server' })}>Центр действий: Restart</Button>
           </div>
@@ -253,7 +253,7 @@ export function App() {
               </div>
             )}
 
-            {tab === 'links' && <LinksView links={links} openActionCenter={openActionCenter} addSavedView={addSavedView} savedViews={savedViews} onCreateUser={() => setOpenCreate(true)} />}
+            {tab === 'links' && <LinksView links={links} openActionCenter={openActionCenter} addSavedView={addSavedView} savedViews={savedViews} />}
             {tab === 'clients' && <ClientsView clients={clients} openActionCenter={openActionCenter} addSavedView={addSavedView} savedViews={savedViews} />}
             {tab === 'sessions' && <SessionsView sessions={sessions} onOpenSession={openSession} addSavedView={addSavedView} savedViews={savedViews} />}
             {tab === 'settings' && <SettingsView server={server} logs={logs} />}
@@ -277,7 +277,7 @@ function SavedViewsBar({ savedViews, onApply }: { savedViews: SavedView[]; onApp
   return <div className="mb-2 flex flex-wrap gap-2">{savedViews.length === 0 ? <span className="text-xs text-muted">Нет сохранённых представлений</span> : savedViews.map((v) => <Button key={v.name} variant="ghost" onClick={() => onApply(v)}>{v.name}</Button>)}</div>
 }
 
-function LinksView({ links, openActionCenter, addSavedView, savedViews, onCreateUser }: { links: Link[]; openActionCenter: (a: ActionExecuteIn) => void; addSavedView: (v: SavedView) => void; savedViews: SavedView[]; onCreateUser: () => void }) {
+function LinksView({ links, openActionCenter, addSavedView, savedViews }: { links: Link[]; openActionCenter: (a: ActionExecuteIn) => void; addSavedView: (v: SavedView) => void; savedViews: SavedView[] }) {
   const [q, setQ] = useState('')
   const [status, setStatus] = useState('all')
   const [profilesOpen, setProfilesOpen] = useState(false)
@@ -287,10 +287,10 @@ function LinksView({ links, openActionCenter, addSavedView, savedViews, onCreate
   return (
     <>
       <Card>
-        <div className="mb-3 flex flex-wrap items-center justify-between gap-2"><SectionTitle title="VLESS ссылки" subtitle="Центр действий + Saved Views"/><div className="flex gap-2"><Button variant="primary" onClick={onCreateUser}>Создать пользователя</Button><Input value={q} onChange={(e)=>setQ(e.target.value)} placeholder="Поиск"/><Button onClick={() => addSavedView({ name: `Представление ${Date.now()}`, query: q, status })}>Сохранить view</Button></div></div>
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-2"><SectionTitle title="VLESS ссылки" subtitle="Центр действий + Saved Views"/><div className="flex gap-2"><Input value={q} onChange={(e)=>setQ(e.target.value)} placeholder="Поиск"/><Button onClick={() => addSavedView({ name: `Представление ${Date.now()}`, query: q, status })}>Сохранить view</Button></div></div>
         <SavedViewsBar savedViews={savedViews} onApply={(v) => { setQ(v.query); setStatus(v.status) }} />
         <div className="mb-2 flex gap-2"><Button variant={status==='all'?'primary':'secondary'} onClick={() => setStatus('all')}>Все</Button><Button variant={status==='active'?'primary':'secondary'} onClick={() => setStatus('active')}>Активные</Button><Button variant={status==='disabled'?'primary':'secondary'} onClick={() => setStatus('disabled')}>Отключённые</Button></div>
-        {filtered.length===0?<EmptyState title="Нет ссылок" subtitle="Измените фильтры или создайте новую"/>:<div className="max-h-[62vh] overflow-auto"><table className="w-full min-w-[980px] text-sm"><thead className="sticky top-0 bg-panel"><tr className="text-left text-muted"><th>Имя</th><th>Протокол</th><th>Статус</th><th>IP</th><th>Активность</th><th>Трафик</th><th>Лимит</th><th>Действия</th></tr></thead><tbody>{filtered.map((l)=><tr key={l.id} className="border-t border-border"><td>{l.name}</td><td><Badge tone="info">{l.provider.toUpperCase()}</Badge></td><td><Badge tone={toneByStatus(l.status) as any}>{statusLabel[l.status] ?? l.status}</Badge></td><td className="font-['JetBrains_Mono'] text-xs">{l.last_ip ?? '—'}</td><td>{formatDate(l.last_activity_at)}</td><td>{formatTraffic(l.total_traffic_gb)}</td><td>{l.traffic_limit_gb ?? '—'}</td><td className="space-x-1"><Button variant="secondary" disabled={l.provider !== "xray"} onClick={()=>navigator.clipboard.writeText(l.vless_url)}>{l.provider === "xray" ? "Copy URI" : "URI n/a"}</Button><Button variant="secondary" onClick={()=>{setSelectedLink(l); setProfilesOpen(true)}}>Profiles</Button><Button variant="secondary" onClick={()=>openActionCenter({ action: 'regenerate_uuid', target_type: 'link', target_id: l.id })}>UUID</Button><Button variant="secondary" onClick={()=>openActionCenter({ action: 'set_link_enabled', target_type: 'link', target_id: l.id, enabled: !l.enabled })}>{l.enabled?'Off':'On'}</Button></td></tr>)}</tbody></table></div>}
+        {filtered.length===0?<EmptyState title="Нет ссылок" subtitle="Измените фильтры или создайте новую"/>:<div className="max-h-[62vh] overflow-auto"><table className="w-full min-w-[980px] text-sm"><thead className="sticky top-0 bg-panel"><tr className="text-left text-muted"><th>Имя</th><th>Статус</th><th>IP</th><th>Активность</th><th>Трафик</th><th>Лимит</th><th>Действия</th></tr></thead><tbody>{filtered.map((l)=><tr key={l.id} className="border-t border-border"><td>{l.name}</td><td><Badge tone={toneByStatus(l.status) as any}>{statusLabel[l.status] ?? l.status}</Badge></td><td className="font-['JetBrains_Mono'] text-xs">{l.last_ip ?? '—'}</td><td>{formatDate(l.last_activity_at)}</td><td>{formatTraffic(l.total_traffic_gb)}</td><td>{l.traffic_limit_gb ?? '—'}</td><td className="space-x-1"><Button variant="secondary" onClick={()=>navigator.clipboard.writeText(l.vless_url)}>Copy</Button><Button variant="secondary" onClick={()=>{setSelectedLink(l); setProfilesOpen(true)}}>Profiles</Button><Button variant="secondary" onClick={()=>openActionCenter({ action: 'regenerate_uuid', target_type: 'link', target_id: l.id })}>UUID</Button><Button variant="secondary" onClick={()=>openActionCenter({ action: 'set_link_enabled', target_type: 'link', target_id: l.id, enabled: !l.enabled })}>{l.enabled?'Off':'On'}</Button></td></tr>)}</tbody></table></div>}
       </Card>
       <ClientProfilesModal open={profilesOpen} onOpenChange={setProfilesOpen} link={selectedLink} />
     </>
@@ -385,32 +385,5 @@ function CreateLinkModal({ open, onOpenChange, onDone }: { open: boolean; onOpen
   const [tag, setTag] = useState('Test device')
   const [note, setNote] = useState('')
   const [limit, setLimit] = useState('40')
-  const [provider, setProvider] = useState<'xray' | 'avg' | 'wg'>('xray')
-  const [expiresAt, setExpiresAt] = useState('')
-
-  async function submit() {
-    const trafficLimit = limit.trim() ? Number(limit) : null
-    await apiFetch('/api/links', {
-      method: 'POST',
-      body: JSON.stringify({
-        name,
-        tag,
-        note: note || 'Создано из UI',
-        provider,
-        expires_at: expiresAt || null,
-        traffic_limit_gb: Number.isFinite(trafficLimit) ? trafficLimit : null,
-        enabled: true
-      })
-    })
-    setName('')
-    setTag('Test device')
-    setNote('')
-    setLimit('40')
-    setProvider('xray')
-    setExpiresAt('')
-    onOpenChange(false)
-    onDone()
-  }
-
-  return <Modal open={open} onOpenChange={onOpenChange} title="Создать VPN пользователя"><div className="grid gap-2"><Input placeholder="Имя" value={name} onChange={(e)=>setName(e.target.value)} /><Input placeholder="Тег" value={tag} onChange={(e)=>setTag(e.target.value)} /><Input placeholder="Заметка" value={note} onChange={(e)=>setNote(e.target.value)} /><Input placeholder="Лимит GB" value={limit} onChange={(e)=>setLimit(e.target.value)} /><Input type="datetime-local" value={expiresAt} onChange={(e)=>setExpiresAt(e.target.value)} /><select className="rounded-xl border border-border bg-bg px-3 py-2 text-sm" value={provider} onChange={(e)=>setProvider(e.target.value as 'xray' | 'avg' | 'wg')}><option value="xray">Xray / VLESS</option><option value="avg">AmneziaWG (AVG)</option><option value="wg">WireGuard</option></select><div className="flex justify-end gap-2"><Button variant="secondary" onClick={()=>onOpenChange(false)}>Отмена</Button><Button onClick={() => { void submit() }} disabled={name.trim().length < 2}>Создать</Button></div></div></Modal>
+  return <Modal open={open} onOpenChange={onOpenChange} title="Создать VLESS ссылку"><div className="grid gap-2"><Input placeholder="Имя" value={name} onChange={(e)=>setName(e.target.value)} /><Input placeholder="Тег" value={tag} onChange={(e)=>setTag(e.target.value)} /><Input placeholder="Заметка" value={note} onChange={(e)=>setNote(e.target.value)} /><Input placeholder="Лимит GB" value={limit} onChange={(e)=>setLimit(e.target.value)} /><div className="flex justify-end gap-2"><Button variant="secondary" onClick={()=>onOpenChange(false)}>Отмена</Button><Button onClick={async()=>{await apiFetch('/api/links',{method:'POST',body:JSON.stringify({name,tag,note:note||'Создано из UI',traffic_limit_gb:Number(limit),enabled:true})}); setName(''); setTag('Test device'); setNote(''); setLimit('40'); onOpenChange(false); onDone()}}>Создать</Button></div></div></Modal>
 }
