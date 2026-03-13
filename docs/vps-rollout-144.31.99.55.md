@@ -32,30 +32,28 @@ ls -lah backups/
 
 ```bash
 git fetch --all
-git checkout codex/server-baseline-20260313
+git checkout codex/build-mvp-for-xray/vless-admin-panel-aj6luj
 git pull --ff-only
 ```
 
-## 3) Bootstrap + preflight + deploy (safe baseline)
-
-```bash
-./install.sh prod-like
-```
-
-Скрипт сам выполнит:
-- создание `.env` (если отсутствует);
-- static release checks;
-- doctor/preflight;
-- deploy + post-deploy validation.
-
-Если нужен ручной путь:
+## 3) Safe prod-like env for this VPS
 
 ```bash
 cp -n .env.example .env
-./scripts/verify-release-readiness.sh
-./scripts/doctor.sh prod-like
+sed -i 's/^APP_ENV=.*/APP_ENV=production/' .env
+sed -i 's/^DEV_ROLE_EMULATION=.*/DEV_ROLE_EMULATION=false/' .env
+sed -i 's/^SCHEMA_MANAGEMENT_MODE=.*/SCHEMA_MANAGEMENT_MODE=alembic/' .env
+
+# keep host dataplane untouched
+sed -i 's/^ENABLE_TLS_PROXY=.*/ENABLE_TLS_PROXY=false/' .env
+sed -i 's/^ENABLE_XRAY_PUBLIC=.*/ENABLE_XRAY_PUBLIC=false/' .env
+sed -i 's/^DOMAIN=.*/DOMAIN=/' .env
+```
+
+## 4) Deploy
+
+```bash
 ./deploy.sh prod-like
-./scripts/post-deploy-check.sh
 ```
 
 ## 5) Post-deploy smoke

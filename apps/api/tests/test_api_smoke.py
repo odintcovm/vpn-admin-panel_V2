@@ -40,7 +40,7 @@ def test_dashboard_overview():
 
 def test_links_crud_minimal():
     with TestClient(app) as client:
-        create = client.post("/api/links", headers=BASE_HEADERS, json={"name": "Smoke Link", "tag": "Test device", "enabled": True})
+        create = client.post("/api/links", headers=BASE_HEADERS, json={"name": "Smoke Link", "tag": "Test device", "provider": "xray", "enabled": True})
         assert create.status_code == 200
         link_id = create.json()["id"]
 
@@ -258,3 +258,41 @@ def test_link_profiles_endpoints():
         assert vless.status_code == 200
         assert 'vless://' in vless.json()['payload']
 
+
+
+def test_create_link_with_provider_and_profiles_contract():
+    with TestClient(app) as client:
+        avg_create = client.post(
+            "/api/links",
+            headers=BASE_HEADERS,
+            json={"name": "AVG Smoke", "tag": "Test device", "provider": "avg", "enabled": True},
+        )
+        assert avg_create.status_code == 200
+        avg_payload = avg_create.json()
+        assert avg_payload["provider"] == "avg"
+        assert avg_payload["profile_formats"] == ["awg_conf"]
+
+        avg_profiles = client.get(f"/api/links/{avg_payload['id']}/profiles", headers=BASE_HEADERS)
+        assert avg_profiles.status_code == 200
+        assert [i["key"] for i in avg_profiles.json()["formats"]] == ["awg_conf"]
+
+        avg_conf = client.get(f"/api/links/{avg_payload['id']}/profiles/awg_conf", headers=BASE_HEADERS)
+        assert avg_conf.status_code == 200
+        assert "[Interface]" in avg_conf.json()["payload"]
+
+        wg_create = client.post(
+            "/api/links",
+            headers=BASE_HEADERS,
+            json={"name": "WG Smoke", "tag": "Test device", "provider": "wg", "enabled": True},
+        )
+        assert wg_create.status_code == 200
+        wg_payload = wg_create.json()
+        assert wg_payload["provider"] == "wg"
+        assert wg_payload["profile_formats"] == ["wg_conf"]
+
+        wg_conf = client.get(f"/api/links/{wg_payload['id']}/profiles/wg_conf", headers=BASE_HEADERS)
+        assert wg_conf.status_code == 200
+        assert "[Peer]" in wg_conf.json()["payload"]
+
+        xray_conf_for_wg = client.get(f"/api/links/{wg_payload['id']}/profiles/vless_uri", headers=BASE_HEADERS)
+        assert xray_conf_for_wg.status_code == 404

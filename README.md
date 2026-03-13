@@ -37,29 +37,20 @@ Base stack (`docker-compose.yml`) безопасен для VPS, где:
 - `docker-compose.tls.yml` — включает публикацию `443:443` для proxy;
 - `docker-compose.xray-public.yml` — включает публикацию `${XRAY_PUBLIC_PORT}:8443` для контейнерного Xray.
 
-## Install/bootstrap flow (recommended)
+## One-command deploy
 
 ```bash
 git clone <repo>
 cd vpn-admin-panel_V2
-./install.sh prod-like
+cp .env.example .env
+./deploy.sh prod-like
 ```
-
-`install.sh` автоматически:
-- создаёт `.env` из `.env.example` (если отсутствует);
-- запускает static release checks;
-- запускает doctor/preflight;
-- выполняет deploy;
-- запускает post-deploy validation.
 
 Поддерживаемые профили:
 
 ```bash
-./install.sh dev
-./install.sh stage
-./install.sh prod-like
-
-# или прямой deploy
+./deploy.sh dev
+./deploy.sh stage
 ./deploy.sh prod-like
 ```
 
@@ -128,7 +119,12 @@ XRAY_PUBLIC_PORT=8443
 - `GET /api/links/{link_id}/profiles`
 - `GET /api/links/{link_id}/profiles/{profile_key}`
 
-В UI: `VLESS ссылки` -> кнопка `Profiles` -> открыть/скопировать/скачать payload.
+Provider-aware форматы:
+- `xray`: `vless_uri`, `qr_payload`, `v2rayn_json`, `singbox_json`, `hiddify_guide`
+- `avg`: `awg_conf`
+- `wg`: `wg_conf`
+
+В UI: `VLESS ссылки` -> `Создать пользователя` (с выбором протокола) -> `Profiles` для мгновенного открытия конфигураций.
 
 ## Release-readiness static validation (без Docker)
 
@@ -152,9 +148,6 @@ XRAY_PUBLIC_PORT=8443
 ## Ops scripts
 
 ```bash
-./scripts/doctor.sh [dev|stage|prod-like]
-./scripts/verify-release-readiness.sh
-./scripts/post-deploy-check.sh
 ./scripts/health-check.sh
 ./scripts/logs.sh [service]
 ./scripts/restart.sh

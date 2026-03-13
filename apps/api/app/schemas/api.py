@@ -8,6 +8,7 @@ class LinkCreate(BaseModel):
     name: str = Field(min_length=2, max_length=120)
     note: str = ""
     tag: str = ""
+    provider: Literal["xray", "avg", "wg"] = "xray"
     traffic_limit_gb: float | None = Field(default=None, ge=0)
     expires_at: datetime | None = None
     enabled: bool = True
@@ -17,6 +18,7 @@ class LinkUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=2, max_length=120)
     note: str | None = None
     tag: str | None = None
+    provider: Literal["xray", "avg", "wg"] | None = None
     traffic_limit_gb: float | None = Field(default=None, ge=0)
     expires_at: datetime | None = None
     enabled: bool | None = None
@@ -28,6 +30,8 @@ class LinkOut(BaseModel):
     uuid: str
     note: str
     tag: str
+    provider: Literal["xray", "avg", "wg"]
+    profile_formats: list[str]
     status: str
     enabled: bool
     last_ip: str | None
