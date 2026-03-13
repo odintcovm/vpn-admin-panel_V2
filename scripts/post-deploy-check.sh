@@ -27,10 +27,14 @@ else
   fail "provider endpoint"
 fi
 
-if ss -ltn '( sport = :443 )' | grep -q ':443'; then
-  ok "host 443 in use (verify ownership policy)"
+if command -v ss >/dev/null 2>&1; then
+  if ss -ltn '( sport = :443 )' | grep -q ':443'; then
+    ok "host 443 in use (verify ownership policy)"
+  else
+    warn "host 443 not in use"
+  fi
 else
-  warn "host 443 not in use"
+  warn "ss command not found, skip host 443 ownership check"
 fi
 
 if [[ $status -eq 0 ]]; then

@@ -39,6 +39,21 @@ for key in APP_PROVIDER DEPLOY_MODE AUTH_ENABLED ADMIN_USERNAME ENABLE_TLS_PROXY
 done
 
 provider="$(grep -E '^APP_PROVIDER=' .env | tail -n1 | cut -d= -f2-)"
+
+mode_env="$(grep -E '^DEPLOY_MODE=' .env | tail -n1 | cut -d= -f2-)"
+if [[ -n "$mode_env" && "$mode_env" != "$MODE" ]]; then
+  yellow "DEPLOY_MODE in .env is '$mode_env', doctor called with '$MODE'"
+fi
+
+auth_enabled="$(grep -E '^AUTH_ENABLED=' .env | tail -n1 | cut -d= -f2-)"
+admin_hash="$(grep -E '^ADMIN_PASSWORD_HASH=' .env | tail -n1 | cut -d= -f2-)"
+admin_password="$(grep -E '^ADMIN_PASSWORD=' .env | tail -n1 | cut -d= -f2-)"
+if [[ "$auth_enabled" != "true" ]]; then
+  yellow "AUTH_ENABLED is not true"
+fi
+if [[ -z "$admin_hash" && "$admin_password" == "admin123" ]]; then
+  yellow "default admin password is still set; generate ADMIN_PASSWORD_HASH for production"
+fi
 if [[ "$provider" =~ ^(xray|wg|avg|mock)$ ]]; then
   green "provider '${provider}' is supported"
 else

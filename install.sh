@@ -60,6 +60,7 @@ if [[ "$MODE" == "behind-ingress" ]]; then
   set_kv ENABLE_XRAY_PUBLIC false
 fi
 
+./scripts/verify-release-readiness.sh
 ./scripts/doctor.sh "$MODE"
 ./deploy.sh "$MODE"
 ./scripts/post-deploy-check.sh
