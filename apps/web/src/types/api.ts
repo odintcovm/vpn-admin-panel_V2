@@ -143,16 +143,3 @@ export type ServerStatus = {
 }
 
 export type Overview = DashboardOverview
-
-
-export type ProviderList = {
-  active_provider: string
-  items: { name: string; active: boolean; capabilities: Record<string, boolean> }[]
-}
-
-export type AuthLoginOut = {
-  ok: boolean
-  auth_mode: string
-  role: string
-  subject_id: string
-}

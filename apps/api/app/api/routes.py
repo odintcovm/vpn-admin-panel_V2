@@ -3,28 +3,18 @@ import json
 import time
 from datetime import datetime
 
-from fastapi import APIRouter, Cookie, Depends, HTTPException, Query, Response
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
-from app.core.security import (
-    SESSION_COOKIE,
-    SecurityPrincipal,
-    create_password_session,
-    get_current_principal,
-    require_permission,
-    revoke_password_session,
-    verify_admin_password,
-)
+from app.core.security import SecurityPrincipal, get_current_principal, require_permission
 from app.db.database import get_db
 from app.models.entities import AdminActionLog, ClientSession, ServerStatus, SessionRecord, SystemEvent, UserLink
 from app.schemas.api import (
     ActionExecuteIn,
     ActionExecuteOut,
     ActionLogOut,
-    AuthLoginIn,
-    AuthLoginOut,
     AuthMeOut,
     ClientOut,
     ClientProfilePayloadOut,
@@ -50,39 +40,6 @@ router = APIRouter(prefix="/api")
 def _not_found(code: str, message: str):
     raise HTTPException(status_code=404, detail={"error": {"code": code, "message": message}})
 
-
-
-@router.post("/auth/login", response_model=AuthLoginOut)
-def auth_login(payload: AuthLoginIn, response: Response, db: Session = Depends(get_db), settings=Depends(get_settings)):
-    if not verify_admin_password(settings, payload.username, payload.password):
-        raise HTTPException(status_code=401, detail={"error": {"code": "INVALID_CREDENTIALS", "message": "Invalid username or password"}})
-    session_secret, user = create_password_session(db, settings, payload.username)
-    response.set_cookie(
-        key=SESSION_COOKIE,
-        value=session_secret,
-        httponly=True,
-        samesite="lax",
-        secure=False if settings.is_dev_like else False,
-        max_age=settings.auth_session_ttl_hours * 3600,
-    )
-    return AuthLoginOut(ok=True, auth_mode="session", role=user.role_key, subject_id=f"session:{user.id}")
-
-
-@router.post("/auth/logout")
-def auth_logout(response: Response, session_cookie: str | None = Cookie(default=None, alias=SESSION_COOKIE), db: Session = Depends(get_db)):
-    revoke_password_session(db, session_cookie)
-    response.delete_cookie(SESSION_COOKIE)
-    return {"ok": True}
-
-
-@router.get("/providers")
-def providers(settings=Depends(get_settings), principal: SecurityPrincipal = Depends(require_permission("settings.read"))):
-    names = ["xray", "wg", "avg", "mock"]
-    data = []
-    for name in names:
-        adapter = ProviderFactory.get(name)
-        data.append({"name": name, "active": name == settings.app_provider, "capabilities": adapter.capabilities()})
-    return {"active_provider": settings.app_provider, "items": data}
 
 def to_link_out(item: dict) -> LinkOut:
     return LinkOut(**item)
@@ -110,11 +67,8 @@ def system_health(
     action = db.query(AdminActionLog).order_by(AdminActionLog.created_at.desc()).first()
     last_refresh = action.created_at if action else datetime.utcnow()
     freshness = int((datetime.utcnow() - last_refresh).total_seconds())
-    adapter = ProviderFactory.get(get_settings().app_provider)
-    provider_state = adapter.get_stats().get("service_status", "degraded")
-    provider_status = "healthy" if provider_state == "running" else ("degraded" if provider_state in {"degraded", "idle"} else "disconnected")
     return HealthFreshnessOut(
-        provider_status=provider_status,
+        provider_status="healthy" if freshness < 120 else "degraded",
         backend_status="ok" if status_row else "degraded",
         server_status=status_row.service_status if status_row else "unknown",
         last_success_refresh_at=last_refresh,
@@ -368,7 +322,7 @@ def server_status(db: Session = Depends(get_db), _: SecurityPrincipal = Depends(
         "hostname": row.hostname,
         "domain": row.domain,
         "port": row.port,
-        "config_summary": {**json.loads(row.config_summary), "provider": get_settings().app_provider},
+        "config_summary": json.loads(row.config_summary),
     }
 
 
@@ -438,7 +392,7 @@ def read_all_notifications(
 
 
 @router.get("/events/stream")
-def event_stream(_: SecurityPrincipal = Depends(require_permission("dashboard.read"))):
+def event_stream():
     def generate():
         notifications = itertools.cycle(
             [

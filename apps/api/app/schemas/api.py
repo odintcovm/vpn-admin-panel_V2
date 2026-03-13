@@ -39,8 +39,6 @@ class LinkOut(BaseModel):
 
 
 class DashboardOverview(BaseModel):
-    provider: str
-    provider_capabilities: dict[str, bool]
     total_links: int
     active_connections: int
     traffic_24h_gb: float
@@ -181,15 +179,3 @@ class ActionExecuteOut(BaseModel):
     action: str
     result: str
     at: datetime
-
-
-class AuthLoginIn(BaseModel):
-    username: str
-    password: str
-
-
-class AuthLoginOut(BaseModel):
-    ok: bool
-    auth_mode: str
-    role: str
-    subject_id: str

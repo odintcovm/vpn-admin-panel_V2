@@ -23,11 +23,11 @@ from app.models.entities import (
     TrafficSnapshot,
     UserLink,
 )
-from app.providers.base import AvgProviderAdapter, MockProviderAdapter, ProviderAdapter, WireGuardProviderAdapter, XrayProviderAdapter
+from app.providers.base import MockXrayAdapter, XrayAdapter, XrayProviderAdapter
 
 
 class StatsService:
-    def __init__(self, db: Session, adapter: ProviderAdapter):
+    def __init__(self, db: Session, adapter: XrayAdapter):
         self.db = db
         self.adapter = adapter
 
@@ -45,8 +45,6 @@ class StatsService:
             for t in self.db.query(TrafficSnapshot).filter(TrafficSnapshot.period == "7d").order_by(TrafficSnapshot.timestamp.asc()).all()
         ]
         return {
-            "provider": self.adapter.name,
-            "provider_capabilities": self.adapter.capabilities(),
             "total_links": total_links,
             "active_connections": active_connections,
             "traffic_24h_gb": round(traffic_24h, 2),
@@ -79,7 +77,7 @@ class LinkService:
                     "total_traffic_gb": link.total_traffic_gb,
                     "traffic_limit_gb": link.traffic_limit_gb,
                     "expires_at": link.expires_at,
-                    "vless_url": f"vless://{link.uuid}@vpn.example.com:443?security=tls&type=tcp#{link.name}" if link.enabled else "",
+                    "vless_url": f"vless://{link.uuid}@vpn.example.com:443?security=tls&type=tcp#{link.name}",
                 }
             )
         return items
@@ -151,7 +149,7 @@ class ClientService:
 
 
 class LogService:
-    def __init__(self, adapter: ProviderAdapter):
+    def __init__(self, adapter: XrayAdapter):
         self.adapter = adapter
 
     def logs(self) -> list[str]:
@@ -160,14 +158,8 @@ class LogService:
 
 class ProviderFactory:
     @staticmethod
-    def get(provider_name: str) -> ProviderAdapter:
-        if provider_name == "xray":
-            return XrayProviderAdapter()
-        if provider_name == "wg":
-            return WireGuardProviderAdapter()
-        if provider_name == "avg":
-            return AvgProviderAdapter()
-        return MockProviderAdapter()
+    def get(provider_name: str) -> XrayAdapter:
+        return XrayProviderAdapter() if provider_name == "xray" else MockXrayAdapter()
 
 
 def list_notifications(db: Session, principal_id: str, unread_only: bool = False, limit: int = 100, offset: int = 0) -> list[dict]:
