@@ -26,6 +26,13 @@ set_env_value() {
   fi
 }
 
+read_env_value() {
+  local key="$1"
+  local line
+  line="$(grep -E "^${key}=" .env | tail -n 1 || true)"
+  echo "${line#*=}"
+}
+
 case "$MODE" in
   dev)
     set_env_value APP_ENV development
@@ -47,12 +54,19 @@ esac
 set_env_value COMPOSE_PROJECT_NAME "vpn_admin_panel"
 set_env_value APP_PROVIDER xray
 set_env_value DATABASE_URL sqlite:///./data/data.db
-set_env_value XRAY_PUBLIC_PORT "$(grep -E '^XRAY_PUBLIC_PORT=' .env | cut -d'=' -f2- || echo 8443)"
-set_env_value ENABLE_TLS_PROXY "$(grep -E '^ENABLE_TLS_PROXY=' .env | cut -d'=' -f2- || echo false)"
-set_env_value ENABLE_XRAY_PUBLIC "$(grep -E '^ENABLE_XRAY_PUBLIC=' .env | cut -d'=' -f2- || echo false)"
+set_env_value XRAY_PUBLIC_PORT "$(read_env_value XRAY_PUBLIC_PORT || echo 8443)"
+set_env_value ENABLE_TLS_PROXY "$(read_env_value ENABLE_TLS_PROXY || echo false)"
+set_env_value ENABLE_XRAY_PUBLIC "$(read_env_value ENABLE_XRAY_PUBLIC || echo false)"
 
-DOMAIN="$(grep -E '^DOMAIN=' .env | cut -d'=' -f2- || true)"
-ENABLE_TLS_PROXY="$(grep -E '^ENABLE_TLS_PROXY=' .env | cut -d'=' -f2- || true)"
+DOMAIN="$(read_env_value DOMAIN || true)"
+ENABLE_TLS_PROXY="$(read_env_value ENABLE_TLS_PROXY || true)"
+ENABLE_XRAY_PUBLIC="$(read_env_value ENABLE_XRAY_PUBLIC || true)"
+XRAY_PUBLIC_PORT="$(read_env_value XRAY_PUBLIC_PORT || true)"
+
+if [[ "$ENABLE_TLS_PROXY" == "true" && -z "$DOMAIN" ]]; then
+  echo "[WARN] ENABLE_TLS_PROXY=true but DOMAIN is empty. Falling back to HTTP :80 site address."
+fi
+
 if [[ "$ENABLE_TLS_PROXY" == "true" && -n "$DOMAIN" ]]; then
   SITE_ADDR="$DOMAIN"
 else
@@ -61,6 +75,17 @@ fi
 sed "s/{\$SITE_ADDR}/${SITE_ADDR}/g" docker/caddy/Caddyfile.template > docker/caddy/Caddyfile
 
 source scripts/common.sh
+
+echo "[INFO] Compose flavor: ${COMPOSE_FLAVOR}"
+echo "[INFO] Compose project: ${COMPOSE_PROJECT_NAME_VAL}"
+echo "[INFO] Compose files: docker-compose.yml"
+
+if [[ "$ENABLE_TLS_PROXY" == "true" ]]; then
+  echo "[INFO] TLS override enabled: docker-compose.tls.yml"
+fi
+if [[ "$ENABLE_XRAY_PUBLIC" == "true" ]]; then
+  echo "[INFO] Xray public override enabled: docker-compose.xray-public.yml (${XRAY_PUBLIC_PORT}:8443)"
+fi
 
 echo "[1/5] Build & start services..."
 "${COMPOSE[@]}" up -d --build
@@ -105,15 +130,16 @@ cat <<OUT
 
 === Deploy complete ===
 Mode: ${MODE}
-Compose project: vpn_admin_panel
+Compose flavor: ${COMPOSE_FLAVOR}
+Compose project: ${COMPOSE_PROJECT_NAME_VAL}
 Panel URL: ${PANEL_URL}
 API URL: ${PANEL_URL}/api
 Health URL (proxy): ${PANEL_URL}/health
 
 Enabled runtime options:
   ENABLE_TLS_PROXY=${ENABLE_TLS_PROXY}
-  ENABLE_XRAY_PUBLIC=$(grep -E '^ENABLE_XRAY_PUBLIC=' .env | cut -d'=' -f2-)
-  XRAY_PUBLIC_PORT=$(grep -E '^XRAY_PUBLIC_PORT=' .env | cut -d'=' -f2-)
+  ENABLE_XRAY_PUBLIC=${ENABLE_XRAY_PUBLIC}
+  XRAY_PUBLIC_PORT=${XRAY_PUBLIC_PORT}
 
 Logs:
   ./scripts/logs.sh [service]

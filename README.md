@@ -121,6 +121,25 @@ XRAY_PUBLIC_PORT=8443
 
 В UI: `VLESS ссылки` -> кнопка `Profiles` -> открыть/скопировать/скачать payload.
 
+## Release-readiness static validation (без Docker)
+
+```bash
+./scripts/verify-release-readiness.sh
+```
+
+Скрипт проверяет:
+- shell syntax;
+- compose compatibility constraints (без `name:`, без `443` в base);
+- override-файлы;
+- Caddy routing правила (`/health`, `/api/*`, SSE);
+- синхронность `Caddyfile.template` и дефолтного `Caddyfile`.
+
+## Server rollout runbook
+
+Пошаговый runbook для VPS `144.31.99.55`:
+
+- `docs/vps-rollout-144.31.99.55.md`
+
 ## Ops scripts
 
 ```bash
@@ -146,6 +165,17 @@ curl -s -H 'x-api-token: admin-token' http://127.0.0.1/api/links | head -c 300
 curl -s http://144.31.99.55/health
 curl -s -H 'x-api-token: admin-token' http://144.31.99.55/api/auth/me
 ```
+
+## Post-deploy verification checklist
+
+- [ ] `docker compose ps` или `docker-compose ps`: `vpn_xray`, `vpn_api`, `vpn_web`, `vpn_proxy` в состоянии up/healthy.
+- [ ] `curl http://127.0.0.1/health` возвращает API JSON, а не frontend HTML.
+- [ ] `curl -H 'x-api-token: admin-token' http://127.0.0.1/api/auth/me` возвращает валидный principal.
+- [ ] `curl -H 'x-api-token: admin-token' http://127.0.0.1/api/links` отдаёт список ссылок.
+- [ ] UI доступен по `http://<server-ip>`.
+- [ ] В `VLESS ссылки` -> `Profiles` открывается modal, работают copy/download.
+- [ ] `./scripts/health-check.sh` проходит без ошибок.
+- [ ] `ss -ltnp | grep ':443'` подтверждает, что 443 остаётся за host Xray (в safe baseline режиме).
 
 ## Локальная разработка
 
